@@ -24,9 +24,45 @@ profile.cov
 go.work
 go.work.sum
 
+# Go cache
+.gocache
+.gomodcache
+
 # env file
 .env
 
 # Editor/IDE
 # .idea/
 # .vscode/
+
+# Python virtual environment
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+
+# Python/export scratch
+testdata/.tmp_ultralytics_export/
+
+# ONNX model files (download via testdata scripts)
+testdata/ops/
+testdata/models/
+testdata/.cache_pinto/
+
+# Generated reports
+report.html
+
+# Examples: built binaries, downloaded models, generated outputs
+examples/*/model/
+examples/*/*.exe
+examples/*/result.*
+
+# Visualization outputs
+*.dot
+*.json.graph
+
+/.claude/settings.local.json
+/CLAUDE.md
