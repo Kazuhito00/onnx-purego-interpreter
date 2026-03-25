@@ -4,7 +4,6 @@ import (
 	"io"
 	"strings"
 
-	"github.com/Kazuhito00/onnx-purego-interpreter/internal/ops"
 	"github.com/Kazuhito00/onnx-purego-interpreter/internal/optimize"
 )
 
@@ -17,7 +16,7 @@ type sessionOptions struct {
 	disabledPasses map[string]bool
 	noOptimize     bool
 	onlyPasses     map[string]bool // if non-nil, only these passes run
-	kernelConfig   *ops.KernelConfig
+	kernelConfig   *KernelConfig
 }
 
 // WithObserver registers an observer from session construction onward.
@@ -50,10 +49,10 @@ func WithProgressLogger(w io.Writer) SessionOption {
 //
 // Example:
 //
-//	kc := ops.DefaultKernelConfig()
+//	kc := onnx.DefaultKernelConfig()
 //	kc.UseTiledGEMM = false  // disable tiled GEMM, use simple loop
 //	onnx.NewSessionWithOptions(modelBytes, onnx.WithKernelConfig(kc))
-func WithKernelConfig(config *ops.KernelConfig) SessionOption {
+func WithKernelConfig(config *KernelConfig) SessionOption {
 	return func(opts *sessionOptions) {
 		opts.kernelConfig = config
 	}

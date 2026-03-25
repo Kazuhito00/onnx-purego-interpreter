@@ -181,9 +181,7 @@ ONNX 標準約 200 個中、約 80% を実装:
 `KernelConfig` で個々のカーネル最適化をオンオフできます:
 
 ```go
-import "github.com/Kazuhito00/onnx-purego-interpreter/internal/ops"
-
-kc := ops.DefaultKernelConfig()
+kc := onnx.DefaultKernelConfig()
 kc.UseTiledGEMM = false  // tiled GEMM を無効化して比較
 kc.MaxThreads = 4        // 並列度を制限
 

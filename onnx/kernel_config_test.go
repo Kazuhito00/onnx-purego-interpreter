@@ -5,8 +5,6 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
-
-	"github.com/Kazuhito00/onnx-purego-interpreter/internal/ops"
 )
 
 // TestKernelConfigOnOff runs each model with default config and with all kernel
@@ -44,7 +42,7 @@ func TestKernelConfigOnOff(t *testing.T) {
 			}
 
 			// All kernel optimizations OFF
-			kc := &ops.KernelConfig{} // all false
+			kc := &KernelConfig{} // all false
 			sessOff, err := NewSessionWithOptions(modelBytes, WithKernelConfig(kc))
 			if err != nil {
 				t.Fatalf("NewSession (kernels off): %v", err)
@@ -105,20 +103,20 @@ func TestKernelConfigIndividual(t *testing.T) {
 
 	flags := []struct {
 		name string
-		set  func(*ops.KernelConfig)
+		set  func(*KernelConfig)
 	}{
-		{"UseTiledGEMM=false", func(kc *ops.KernelConfig) { kc.UseTiledGEMM = false }},
-		{"UseDepthwiseKernel=false", func(kc *ops.KernelConfig) { kc.UseDepthwiseKernel = false }},
-		{"Use1x1FastPath=false", func(kc *ops.KernelConfig) { kc.Use1x1FastPath = false }},
-		{"UseConvTransposeGEMM=false", func(kc *ops.KernelConfig) { kc.UseConvTransposeGEMM = false }},
-		{"UsePoolFastPath=false", func(kc *ops.KernelConfig) { kc.UsePoolFastPath = false }},
-		{"UseFastErf=false", func(kc *ops.KernelConfig) { kc.UseFastErf = false }},
-		{"UseParallelConv=false", func(kc *ops.KernelConfig) { kc.UseParallelConv = false }},
+		{"UseTiledGEMM=false", func(kc *KernelConfig) { kc.UseTiledGEMM = false }},
+		{"UseDepthwiseKernel=false", func(kc *KernelConfig) { kc.UseDepthwiseKernel = false }},
+		{"Use1x1FastPath=false", func(kc *KernelConfig) { kc.Use1x1FastPath = false }},
+		{"UseConvTransposeGEMM=false", func(kc *KernelConfig) { kc.UseConvTransposeGEMM = false }},
+		{"UsePoolFastPath=false", func(kc *KernelConfig) { kc.UsePoolFastPath = false }},
+		{"UseFastErf=false", func(kc *KernelConfig) { kc.UseFastErf = false }},
+		{"UseParallelConv=false", func(kc *KernelConfig) { kc.UseParallelConv = false }},
 	}
 
 	for _, f := range flags {
 		t.Run(f.name, func(t *testing.T) {
-			kc := ops.DefaultKernelConfig()
+			kc := DefaultKernelConfig()
 			f.set(kc)
 			sess, err := NewSessionWithOptions(modelBytes, WithKernelConfig(kc))
 			if err != nil {

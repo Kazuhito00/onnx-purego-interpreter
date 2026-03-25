@@ -134,7 +134,7 @@ func NewSessionWithOptions(onnxBytes []byte, opts ...SessionOption) (*Session, e
 	emitStage("analysis.validate.post", t0, "")
 
 	reg := ops.NewRegistry()
-	ops.RegisterAll(reg, cfg.kernelConfig)
+	ops.RegisterAll(reg, cfg.kernelConfig.toInternal())
 
 	t0 = time.Now()
 	build, err := lowering.Prepare(g, reg)
