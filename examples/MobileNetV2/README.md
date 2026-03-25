@@ -23,7 +23,7 @@ Top-5 classification results are printed to the console.<br>
 Top-5 分類結果をコンソールに表示。
 
 ## Output Example / 出力例
-
+![sample](https://github.com/user-attachments/assets/14b64923-ff86-48a5-a100-97b75a5738a3)
 ```
 Image: 800x533
 Model loaded: mobilenetv2-7.onnx
