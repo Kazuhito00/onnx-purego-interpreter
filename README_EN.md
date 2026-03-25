@@ -110,6 +110,8 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
 | `Session.Warnings()` | Get opset compatibility warnings |
 | `onnx.Input(name, tensor)` | Create single-input map |
 | `onnx.Inputs(name1, t1, ...)` | Create multi-input map |
+| `onnx.DefaultKernelConfig()` | Create default kernel configuration |
+| `onnx.OptimizationPassNames()` | Get list of available optimization pass names |
 | `tensor.NewDense[T](shape, data)` | Create a typed tensor |
 
 > [!CAUTION]
@@ -202,6 +204,48 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | `UseFastErf` | true | Polynomial erf approximation for FastGELU |
 | `UseParallelConv` | true | Goroutine parallelism for large Conv |
 | `MaxThreads` | 0 | Max goroutine count (0 = `runtime.GOMAXPROCS`) |
+
+## Profiling
+
+The built-in profiler measures per-op and per-node execution time and memory allocation.
+
+```go
+prof := onnx.NewProfiler()
+prof.Enable()
+
+sess, _ := onnx.NewSessionWithOptions(modelBytes,
+    onnx.WithObserver(prof),
+)
+
+outputs, _ := sess.Run(input)
+
+// Print per-op summary
+fmt.Println(prof.Summary())
+```
+
+Example output:
+
+```
+Op Profiling Summary (total: 45.2ms)
+Op                           Calls   Total(ms)    Avg(ms)   Alloc(KB)
+─────────────────────────────────────────────────────────────────────────
+Conv                            26      32.1      1.235      1024.0  (71.0%)
+MatMul                           2       5.3      2.650       256.0  (11.7%)
+Relu                            24       3.1      0.129         0.0  (6.9%)
+...
+```
+
+### Profiler API
+
+| Method | Description |
+|---|---|
+| `NewProfiler()` | Create a profiler (initially disabled) |
+| `Enable()` / `Disable()` | Turn profiling on / off |
+| `Reset()` | Clear all collected data |
+| `Summary()` | Return a summary string |
+| `Results()` | Get per-op results (sorted by total time, descending) |
+| `NodeResults()` | Get per-node results (sorted by total time, descending) |
+| `TotalNs()` | Return total profiled time in nanoseconds |
 
 ## Development
 

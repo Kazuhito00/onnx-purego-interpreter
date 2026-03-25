@@ -110,6 +110,8 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
 | `Session.Warnings()` | opset 互換性の警告を取得 |
 | `onnx.Input(name, tensor)` | 単一入力の map を作成 |
 | `onnx.Inputs(name1, t1, ...)` | 複数入力の map を作成 |
+| `onnx.DefaultKernelConfig()` | デフォルトのカーネル設定を作成 |
+| `onnx.OptimizationPassNames()` | 利用可能な最適化パス名の一覧を取得 |
 | `tensor.NewDense[T](shape, data)` | 型付きテンソルを作成 |
 
 > [!CAUTION]
@@ -202,6 +204,48 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | `UseFastErf` | true | FastGELU 用の多項式近似 erf |
 | `UseParallelConv` | true | 大きな Conv の goroutine 並列化 |
 | `MaxThreads` | 0 | 最大 goroutine 並列数 (0 = `runtime.GOMAXPROCS`) |
+
+## Profiling
+
+内蔵プロファイラを使って、op 種別ごと・ノードごとの実行時間やメモリ割り当てを計測できます。
+
+```go
+prof := onnx.NewProfiler()
+prof.Enable()
+
+sess, _ := onnx.NewSessionWithOptions(modelBytes,
+    onnx.WithObserver(prof),
+)
+
+outputs, _ := sess.Run(input)
+
+// op 種別ごとのサマリー表示
+fmt.Println(prof.Summary())
+```
+
+出力例:
+
+```
+Op Profiling Summary (total: 45.2ms)
+Op                           Calls   Total(ms)    Avg(ms)   Alloc(KB)
+─────────────────────────────────────────────────────────────────────────
+Conv                            26      32.1      1.235      1024.0  (71.0%)
+MatMul                           2       5.3      2.650       256.0  (11.7%)
+Relu                            24       3.1      0.129         0.0  (6.9%)
+...
+```
+
+### Profiler API
+
+| メソッド | 説明 |
+|---|---|
+| `NewProfiler()` | プロファイラを作成（初期状態は無効） |
+| `Enable()` / `Disable()` | プロファイリングの有効化 / 無効化 |
+| `Reset()` | 収集済みデータをクリア |
+| `Summary()` | サマリー文字列を返す |
+| `Results()` | op 種別ごとの結果を取得（合計時間の降順） |
+| `NodeResults()` | ノード単位の結果を取得（合計時間の降順） |
+| `TotalNs()` | プロファイル合計時間（ナノ秒）を返す |
 
 ## Development
 
