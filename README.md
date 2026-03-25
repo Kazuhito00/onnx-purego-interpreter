@@ -199,7 +199,7 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | `UsePoolFastPath` | true | MaxPool 2×2s2 / 3×3s2 特化 |
 | `UseFastErf` | true | FastGELU 用の多項式近似 erf |
 | `UseParallelConv` | true | 大きな Conv の goroutine 並列化 |
-| `MaxThreads` | 0 | 最大 goroutine 数 (0 = `runtime.GOMAXPROCS`) |
+| `MaxThreads` | 0 | 最大 goroutine 並列数 (0 = `runtime.GOMAXPROCS`) |
 
 ## Development
 
