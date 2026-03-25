@@ -2,11 +2,12 @@
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)<br>
-CGo なし・アセンブリなし・ネイティブ依存なしの ピュアGo ONNX 推論パッケージです。
+cgo なし・アセンブリなし・ネイティブ依存なしの ピュアGo ONNX 推論パッケージです。
 
 > [!IMPORTANT]
 > 本ライブラリはピュアGo実装であり、SIMD やネイティブライブラリによる最適化は行っていません。<br>
-> そのため、推論性能は ONNX Runtime と比較しておおよそ 10〜50 倍程度遅くなります。
+> そのため、推論性能は ONNX Runtime と比較して、10〜50 倍程度遅くなる傾向があります（モデル・ハードウェア依存）<br>
+> また、検証できているモデルも限られるため、動作しないモデルも多く存在します。
 >
 > 主な想定用途:
 > - 小規模モデルの推論
@@ -15,13 +16,13 @@ CGo なし・アセンブリなし・ネイティブ依存なしの ピュアGo 
 > - 教育・検証用途（ONNX の動作理解やデバッグ）
 >
 > 中〜大規模モデルの推論や、高スループット・低レイテンシが求められる実運用用途には適しておらず、<br>
-> ONNX Runtime の代替として使用することは想定していません。
+> ONNX Runtime の代替用途は対象外です。
 
 ## Features
 
 - **Pure Go** — `GOOS`/`GOARCH` を問わずクロスコンパイル可能
-- **単一依存** — 外部依存は `google.golang.org/protobuf` のみ
-- **主要オペレーター対応** — ONNX 標準約 200 個中、約 80% を実装
+- **最小依存** — 外部依存は `google.golang.org/protobuf` のみ
+- **主要オペレーター対応** — ONNX 標準約 200 個中、約 80% を実装（2026/03/25時点）
 - **グラフ最適化** — Conv+BN 融合、GELU 融合、不要ノード除去など 11 パスを自動適用
 
 ## Installation
@@ -46,9 +47,15 @@ import (
 )
 
 func main() {
-	modelBytes, _ := os.ReadFile("model.onnx")
-
-	sess, _ := onnx.NewSession(modelBytes)
+	modelBytes, err := os.ReadFile("model.onnx")
+	if err != nil {
+	    panic(err)
+	}
+	
+	sess, err := onnx.NewSession(modelBytes)
+	if err != nil {
+	    panic(err)
+	}
 
 	input := tensor.NewDense[float32](
 		tensor.Shape{1, 3, 224, 224},
@@ -103,8 +110,9 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
 | `onnx.Inputs(name1, t1, ...)` | 複数入力の map を作成 |
 | `tensor.NewDense[T](shape, data)` | 型付きテンソルを作成 |
 
-> **Note:** `Session.Run` / `RunWithNames` is **not goroutine-safe**. The session reuses an internal arena across runs. To run inference concurrently, create separate sessions.<br>
-> **注意:** `Session.Run` / `RunWithNames` は **goroutine 安全ではない**。セッションは内部 arena を実行間で使い回す。並列推論が必要な場合はセッションを別々に作成すること。
+> [!CAUTION]
+> `Session.Run` / `RunWithNames` は goroutine 安全ではない。<br>
+> セッションは内部 arena を実行間で使い回す。並列推論が必要な場合はセッションを別々に作成すること。
 
 ### セッションオプション一覧
 
@@ -124,7 +132,7 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
 ```
 .onnx bytes
   → Reader / Decoder          protobuf デシリアライズ
-  → Frontend IR                protobuf 非依存のモデル表現
+  → Frontend IR                protobuf から分離したモデル表現
   → Canonical IR               正規化済み意味グラフ (Graph, Node, Initializer)
   → Analysis / Validation      グラフ整合性 + opset 互換性チェック
   → Optimization Passes        BN融合, Conv融合, GELU融合, 不要ノード除去
@@ -134,7 +142,7 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
 
 ## Operator Coverage
 
-ONNX 標準約 200 個中、約 80% を実装済み:
+ONNX 標準約 200 個中、約 80% を実装:
 
 - **算術 / 線形代数** — Add, Sub, Mul, Div, MatMul, Gemm, ...
 - **活性化** — Relu, Sigmoid, Softmax, GELU, ...
