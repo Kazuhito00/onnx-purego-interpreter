@@ -1109,15 +1109,15 @@ func TestQuantizeLinear(t *testing.T) {
 	if out[0].Len() != 3 { t.Fatal("QuantizeLinear: wrong length") }
 }
 
-// Stub tests for not-yet-implemented ops (ensure they return error, not panic)
-func TestStubOps(t *testing.T) {
+// Loop and Scan stubs return error (actual execution is handled by engine runtime via LoopControl/ScanControl)
+func TestLoopScanStubs(t *testing.T) {
 	dummy := tensor.NewDense[float32](tensor.Shape{1}, []float32{0})
 	stubs := []struct{ name string; fn OpFunc }{
 		{"Loop", opLoop}, {"Scan", opScan},
 	}
 	for _, s := range stubs {
 		_, err := s.fn(makeNode(s.name, nil), []tensor.Tensor{dummy})
-		if err == nil { t.Errorf("%s: expected error for stub op", s.name) }
+		if err == nil { t.Errorf("%s: expected error (stub dispatched by engine runtime)", s.name) }
 	}
 }
 

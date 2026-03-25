@@ -361,15 +361,40 @@ func (s *Session) Run(inputs ...tensor.Tensor) (map[string]tensor.Tensor, error)
 }
 
 // RunWithNames executes the model with explicitly named inputs.
+// Returns an error if any input name is not a valid graph input.
 // 名前指定の入力でモデルを実行する。
+// グラフ入力に存在しない名前が含まれる場合はエラーを返す。
 //
 //	outputs, err := sess.RunWithNames(map[string]tensor.Tensor{"input": t})
 //	outputs, err := sess.RunWithNames(onnx.Input("input", t))
 func (s *Session) RunWithNames(inputs map[string]tensor.Tensor) (map[string]tensor.Tensor, error) {
+	if err := s.validateInputNames(inputs); err != nil {
+		return nil, err
+	}
 	if s.plan != nil {
 		return s.runCompiled(inputs)
 	}
 	return s.run(inputs)
+}
+
+// validateInputNames checks that all input names exist as graph inputs or initializers.
+func (s *Session) validateInputNames(inputs map[string]tensor.Tensor) error {
+	for name := range inputs {
+		if _, isInit := s.graph.Initializers[name]; isInit {
+			continue
+		}
+		found := false
+		for _, inp := range s.graph.Inputs {
+			if inp.Name == name {
+				found = true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("engine: unknown input name %q; valid inputs: %v", name, s.InputNames())
+		}
+	}
+	return nil
 }
 
 func (s *Session) run(inputs map[string]tensor.Tensor) (map[string]tensor.Tensor, error) {

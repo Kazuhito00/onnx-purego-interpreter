@@ -828,6 +828,30 @@ func TestOpGather(t *testing.T)           { runNamedCase(t, "ops", "gather", def
 func TestOpSqueezeUnsqueeze(t *testing.T) { runNamedCase(t, "ops", "squeeze_unsqueeze", defaultTol) }
 func TestOpMLPSmall(t *testing.T)         { runNamedCase(t, "ops", "mlp_small", defaultTol) }
 func TestOpConvReluPool(t *testing.T)     { runNamedCase(t, "ops", "conv_relu_pool", defaultTol) }
+func TestRunWithNamesUnknownInput(t *testing.T) {
+	modelPath := filepath.Join(testdataDir, "ops", "add_broadcast", "model.onnx")
+	if _, err := os.Stat(modelPath); os.IsNotExist(err) {
+		t.Skip("add_broadcast model not found")
+	}
+	modelBytes, err := os.ReadFile(modelPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	sess, err := NewSession(modelBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dummy := tensor.NewDense[float32](tensor.Shape{1}, []float32{0})
+	_, err = sess.RunWithNames(map[string]tensor.Tensor{"typo": dummy})
+	if err == nil {
+		t.Fatal("expected error for unknown input name, got nil")
+	}
+	if !strings.Contains(err.Error(), "unknown input name") {
+		t.Fatalf("expected 'unknown input name' in error, got: %s", err.Error())
+	}
+}
+func TestOpLoopSum(t *testing.T)         { runNamedCase(t, "ops", "loop_sum", defaultTol) }
+func TestOpScanCumsum(t *testing.T)      { runNamedCase(t, "ops", "scan_cumsum", defaultTol) }
 func TestGeneratedOpCases(t *testing.T) {
 	for _, c := range findAllCases() {
 		if c.category != "ops" {
