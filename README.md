@@ -1,5 +1,7 @@
 # ONNX Pure Go Interpreter
 
+[English](README_EN.md) | **日本語**
+
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)<br>
 cgo なし・アセンブリなし・ネイティブ依存なしの ピュアGo ONNX 推論パッケージです。
