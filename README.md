@@ -131,7 +131,7 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
 
 ```
 .onnx bytes
-  → Reader / Decoder          protobuf デシリアライズ
+  → Reader / Decoder           protobuf デシリアライズ
   → Frontend IR                protobuf から分離したモデル表現
   → Canonical IR               正規化済み意味グラフ (Graph, Node, Initializer)
   → Analysis / Validation      グラフ整合性 + opset 互換性チェック
