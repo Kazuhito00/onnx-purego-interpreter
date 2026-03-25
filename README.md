@@ -88,7 +88,7 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
 )
 ```
 
-## API Reference
+## API
 
 | 関数 / メソッド | 説明 |
 |---|---|
