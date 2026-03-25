@@ -44,6 +44,7 @@ The ONNX model is from [DEIMv2-ONNX-Sample](https://github.com/Kazuhito00/DEIMv2
 ONNX モデルは [DEIMv2-ONNX-Sample](https://github.com/Kazuhito00/DEIMv2-ONNX-Sample) から取得。
 
 ## Output / 出力
+<img width="800" height="533" alt="result" src="https://github.com/user-attachments/assets/57426a50-5b29-43d4-8479-ad029347c074" />
 
 - Bounding boxes with class name and score drawn on detected objects / 検出オブジェクトにクラス名・スコア付きバウンディングボックスを描画
 - Inference time displayed in the top-left corner / 左上に推論時間を表示
