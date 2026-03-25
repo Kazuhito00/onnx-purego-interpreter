@@ -145,7 +145,7 @@ ONNX 標準約 200 個中、約 80% を実装済み:
 - **量子化** — DequantizeLinear, QuantizeLinear, QLinearConv, ...
 - **信号処理** — DFT, STFT, MelWeightMatrix
 
-全一覧: [Operators.md](Operators.md)
+一覧: [Operators.md](Operators.md)
 
 ## Graph Optimizations
 
