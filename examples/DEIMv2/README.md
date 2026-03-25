@@ -20,12 +20,12 @@ go run .
 ```
 
 Detection results are saved to `result.png`.<br>
-検出結果が `result.png` に保存される。
+検出結果は `result.png` に保存。
 
 ## Configuration / 設定
 
 Edit constants in `main.go` to change input size or score threshold.<br>
-`main.go` の定数で入力サイズやスコア閾値を変更できる。
+`main.go` の定数で入力サイズやスコア閾値を変更可能。
 
 ```go
 const (
@@ -38,7 +38,17 @@ const (
 )
 ```
 
+## Model Source / モデル取得元
+
+The ONNX model is from [DEIMv2-ONNX-Sample](https://github.com/Kazuhito00/DEIMv2-ONNX-Sample).<br>
+ONNX モデルは [DEIMv2-ONNX-Sample](https://github.com/Kazuhito00/DEIMv2-ONNX-Sample) から取得。
+
 ## Output / 出力
 
 - Bounding boxes with class name and score drawn on detected objects / 検出オブジェクトにクラス名・スコア付きバウンディングボックスを描画
 - Inference time displayed in the top-left corner / 左上に推論時間を表示
+
+## Sample Image / サンプル画像
+
+Sample image from [pakutaso](https://www.pakutaso.com/): "[トライアスロン競技で自転車走行する選手の力強い走り](https://www.pakutaso.com/20260155013post-56295.html)".<br>
+サンプル画像は[ぱくたそ](https://www.pakutaso.com/)様の「[トライアスロン競技で自転車走行する選手の力強い走り](https://www.pakutaso.com/20260155013post-56295.html)」を使用。
