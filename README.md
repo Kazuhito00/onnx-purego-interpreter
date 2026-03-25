@@ -9,7 +9,7 @@ CGo なし・アセンブリなし・ネイティブ依存なしの Pure Go ONNX
 
 - **Pure Go** — `GOOS`/`GOARCH` を問わずクロスコンパイル可能
 - **単一依存** — 外部依存は `google.golang.org/protobuf` のみ
-- **広いオペレーター対応** — ONNX 標準 198 個中 **158 個** を実装 (80%)、50 以上の実モデルでテスト通過
+- **広いオペレーター対応** — ONNX 標準約 200 個中、約 80% を実装。50 以上の実モデルでテスト通過
 - **グラフ最適化** — Conv+BN 融合、GELU 融合、不要ノード除去など 11 パスを自動適用
 - **高速カーネル** — tiled GEMM (microKernel4x8)、depthwise 特化、goroutine 並列化
 - **オールインワン** — 読み込み → 最適化 → lowering → 実行を 1 ライブラリで完結
@@ -121,7 +121,7 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
 
 ## Operator Coverage
 
-ONNX 標準 198 個中 158 個を実装済み (80%):
+ONNX 標準約 200 個中、約 80% を実装済み:
 
 - **算術 / 線形代数** — Add, Sub, Mul, Div, MatMul, Gemm, ...
 - **活性化** — Relu, Sigmoid, Softmax, GELU, ...
