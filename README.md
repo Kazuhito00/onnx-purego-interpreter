@@ -103,6 +103,9 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
 | `onnx.Inputs(name1, t1, ...)` | 複数入力の map を作成 |
 | `tensor.NewDense[T](shape, data)` | 型付きテンソルを作成 |
 
+> **Note:** `Session.Run` / `RunWithNames` is **not goroutine-safe**. The session reuses an internal arena across runs. To run inference concurrently, create separate sessions.<br>
+> **注意:** `Session.Run` / `RunWithNames` は **goroutine 安全ではない**。セッションは内部 arena を実行間で使い回す。並列推論が必要な場合はセッションを別々に作成すること。
+
 ### セッションオプション一覧
 
 | オプション | 説明 |

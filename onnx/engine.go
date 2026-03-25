@@ -31,7 +31,11 @@ import (
 )
 
 // Session holds a compiled ONNX model ready for execution.
+// A Session is NOT safe for concurrent use by multiple goroutines.
+// The internal arena is reused across runs — create separate sessions for parallel inference.
 // コンパイル済み ONNX モデルを保持し、推論実行に使用する。
+// Session は複数 goroutine からの並列使用に対して安全ではない。
+// 内部 arena は実行間で使い回される — 並列推論には別セッションを作成すること。
 type Session struct {
 	frontendModel *frontend.Model
 	graph         *ir.Graph
@@ -301,17 +305,26 @@ func Input(name string, t tensor.Tensor) map[string]tensor.Tensor {
 }
 
 // Inputs creates an input map from name/tensor pairs. Convenience for RunWithNames.
+// Panics if the number of arguments is odd, a name is not a string, or a value is not a tensor.Tensor.
 // 名前/テンソルのペアから入力 map を作成する。RunWithNames のヘルパー。
+// 引数が奇数、名前が string でない、値が tensor.Tensor でない場合は panic する。
 //
 //	outputs, err := sess.RunWithNames(onnx.Inputs("images", images, "sizes", sizes))
 func Inputs(pairs ...interface{}) map[string]tensor.Tensor {
+	if len(pairs)%2 != 0 {
+		panic(fmt.Sprintf("onnx.Inputs: odd number of arguments (%d), expected name/tensor pairs", len(pairs)))
+	}
 	m := make(map[string]tensor.Tensor, len(pairs)/2)
 	for i := 0; i+1 < len(pairs); i += 2 {
-		name, _ := pairs[i].(string)
-		t, _ := pairs[i+1].(tensor.Tensor)
-		if name != "" && t != nil {
-			m[name] = t
+		name, ok := pairs[i].(string)
+		if !ok {
+			panic(fmt.Sprintf("onnx.Inputs: argument %d must be a string, got %T", i, pairs[i]))
 		}
+		t, ok := pairs[i+1].(tensor.Tensor)
+		if !ok {
+			panic(fmt.Sprintf("onnx.Inputs: argument %d must be a tensor.Tensor, got %T", i+1, pairs[i+1]))
+		}
+		m[name] = t
 	}
 	return m
 }

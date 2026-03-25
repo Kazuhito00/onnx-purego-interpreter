@@ -238,8 +238,8 @@ ONNX 標準オペレーター約 200 個中、約 80% を実装。
 | Op | Go | Test | Types | Notes / 備考 |
 |---|---|---|---|---|
 | If | ✅ | | — | Subgraph execution / サブグラフ実行対応 |
-| Loop | ✅ | | — | Engine runtime / エンジンランタイムで処理 |
-| Scan | ✅ | | — | Engine runtime / エンジンランタイムで処理 |
+| Loop | ✅ | ✅ | — | Iterative subgraph execution / 反復サブグラフ実行 |
+| Scan | ✅ | ✅ | — | Sequential subgraph execution / 逐次サブグラフ実行 |
 
 ## Object Detection
 

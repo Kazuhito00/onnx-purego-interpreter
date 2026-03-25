@@ -19,6 +19,8 @@ type Instruction struct {
 	NumOutputs  int
 	IsView      bool
 	IfControl   *IfControl
+	LoopControl *LoopControl
+	ScanControl *ScanControl
 }
 
 type CaptureEntry struct {
@@ -35,6 +37,19 @@ type CompiledSubgraph struct {
 type IfControl struct {
 	Then *CompiledSubgraph
 	Else *CompiledSubgraph
+}
+
+// LoopControl holds compiled subgraph for ONNX Loop node.
+// Loop(M, cond, v_initial...) → outputs
+//   body subgraph: (i, cond, v_prev...) → (cond_out, v_next..., scan_out...)
+type LoopControl struct {
+	Body *CompiledSubgraph
+}
+
+// ScanControl holds compiled subgraph for ONNX Scan node.
+type ScanControl struct {
+	Body       *CompiledSubgraph
+	NumScanInputs int
 }
 
 type InitEntry struct {
@@ -120,12 +135,27 @@ func Compile(g *ir.Graph, order []*ir.Node, reg *ops.Registry, inits map[string]
 		}
 
 		var ifControl *IfControl
-		if node.OpType == "If" {
+		var loopControl *LoopControl
+		var scanControl *ScanControl
+		switch node.OpType {
+		case "If":
 			compiled, err := compileIfControl(node, reg)
 			if err != nil {
 				return nil, err
 			}
 			ifControl = compiled
+		case "Loop":
+			compiled, err := compileLoopControl(node, reg)
+			if err != nil {
+				return nil, err
+			}
+			loopControl = compiled
+		case "Scan":
+			compiled, err := compileScanControl(node, reg)
+			if err != nil {
+				return nil, err
+			}
+			scanControl = compiled
 		}
 
 		iSlots := make([]int16, len(node.Inputs))
@@ -146,6 +176,8 @@ func Compile(g *ir.Graph, order []*ir.Node, reg *ops.Registry, inits map[string]
 			NumOutputs:  len(node.Outputs),
 			IsView:      viewOps[node.OpType],
 			IfControl:   ifControl,
+			LoopControl: loopControl,
+			ScanControl: scanControl,
 		})
 		if len(node.Inputs) > maxInputs {
 			maxInputs = len(node.Inputs)
@@ -182,14 +214,31 @@ func compileIfControl(node *ir.Node, reg *ops.Registry) (*IfControl, error) {
 	return &IfControl{Then: thenPlan, Else: elsePlan}, nil
 }
 
+func compileLoopControl(node *ir.Node, reg *ops.Registry) (*LoopControl, error) {
+	body, err := compileSubgraph(node, "body", reg)
+	if err != nil {
+		return nil, err
+	}
+	return &LoopControl{Body: body}, nil
+}
+
+func compileScanControl(node *ir.Node, reg *ops.Registry) (*ScanControl, error) {
+	body, err := compileSubgraph(node, "body", reg)
+	if err != nil {
+		return nil, err
+	}
+	numScanInputs := int(node.GetAttrInt("num_scan_inputs", 1))
+	return &ScanControl{Body: body, NumScanInputs: numScanInputs}, nil
+}
+
 func compileSubgraph(node *ir.Node, attrName string, reg *ops.Registry) (*CompiledSubgraph, error) {
 	attr, ok := node.Attrs[attrName]
 	if !ok {
-		return nil, fmt.Errorf("lowering: If node %s missing %s", node.Name, attrName)
+		return nil, fmt.Errorf("lowering: %s node %s missing %s", node.OpType, node.Name, attrName)
 	}
 	ag, ok := attr.(*ir.AttrGraph)
 	if !ok || ag == nil || ag.Value == nil {
-		return nil, fmt.Errorf("lowering: If node %s has invalid %s", node.Name, attrName)
+		return nil, fmt.Errorf("lowering: %s node %s has invalid %s", node.OpType, node.Name, attrName)
 	}
 
 	order, err := topoSort(ag.Value)
