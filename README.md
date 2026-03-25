@@ -2,7 +2,7 @@
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)<br>
-CGo なし・アセンブリなし・ネイティブ依存なしの ピュアGo ONNX 推論ランタイムです。
+CGo なし・アセンブリなし・ネイティブ依存なしの ピュアGo ONNX 推論パッケージです。
 
 > [!IMPORTANT]
 > 本ライブラリはピュアGo実装であり、SIMD やネイティブライブラリによる最適化は行っていません。<br>
