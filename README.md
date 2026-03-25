@@ -1,18 +1,28 @@
 # ONNX Pure Go Interpreter
 
 [![Go](https://img.shields.io/badge/Go-1.26+-00ADD8?logo=go&logoColor=white)](https://go.dev/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)<br>
+CGo なし・アセンブリなし・ネイティブ依存なしの ピュアGo ONNX 推論ランタイムです。
 
-CGo なし・アセンブリなし・ネイティブ依存なしの Pure Go ONNX 推論ランタイム
+> [!IMPORTANT]
+> 本ライブラリはピュアGo実装であり、SIMD やネイティブライブラリによる最適化は行っていません。<br>
+> そのため、推論性能は ONNX Runtime と比較しておおよそ 10〜50 倍程度遅くなります。
+>
+> 主な想定用途:
+> - 小規模モデルの推論
+> - クロスコンパイル前提の環境（cgo 非対応環境、WASM など）
+> - ONNX グラフの解析・可視化・最適化検証
+> - 教育・検証用途（ONNX の動作理解やデバッグ）
+>
+> 中〜大規模モデルの推論や、高スループット・低レイテンシが求められる実運用用途には適しておらず、<br>
+> ONNX Runtime の代替として使用することは想定していません。
 
 ## Features
 
 - **Pure Go** — `GOOS`/`GOARCH` を問わずクロスコンパイル可能
 - **単一依存** — 外部依存は `google.golang.org/protobuf` のみ
-- **広いオペレーター対応** — ONNX 標準約 200 個中、約 80% を実装。50 以上の実モデルでテスト通過
+- **広いオペレーター対応** — ONNX 標準約 200 個中、約 80% を実装
 - **グラフ最適化** — Conv+BN 融合、GELU 融合、不要ノード除去など 11 パスを自動適用
-- **高速カーネル** — tiled GEMM (microKernel4x8)、depthwise 特化、goroutine 並列化
-- **オールインワン** — 読み込み → 最適化 → lowering → 実行を 1 ライブラリで完結
 
 ## Installation
 
@@ -213,6 +223,8 @@ go test -v ./onnx -run TestGenerateReport
 4. 同ファイルに unit test を追加
 5. `testdata/generate_test_models.py` に Python ORT 比較テストを追加
 
-## License
+# Author
+高橋かずひと(https://x.com/KzhtTkhs)
 
-[MIT](LICENSE)
+# License
+ONNX Pure Go Interpreter is under [MIT license](LICENSE).<br>
