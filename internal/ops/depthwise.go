@@ -18,9 +18,10 @@ func depthwiseF32(X, W, bias []float32, N, C, H, Wi, KH, KW, OH, OW, strideH, st
 			}
 
 			if KH == 3 && KW == 3 {
-				w00 := W[c*KHKW]; w01 := W[c*KHKW+1]; w02 := W[c*KHKW+2]
-				w10 := W[c*KHKW+3]; w11 := W[c*KHKW+4]; w12 := W[c*KHKW+5]
-				w20 := W[c*KHKW+6]; w21 := W[c*KHKW+7]; w22 := W[c*KHKW+8]
+				wSlice := W[c*KHKW : c*KHKW+9 : c*KHKW+9] // BCE
+				w00 := wSlice[0]; w01 := wSlice[1]; w02 := wSlice[2]
+				w10 := wSlice[3]; w11 := wSlice[4]; w12 := wSlice[5]
+				w20 := wSlice[6]; w21 := wSlice[7]; w22 := wSlice[8]
 
 				for oh := 0; oh < OH; oh++ {
 					ih0 := oh*strideH - padTop
@@ -32,6 +33,7 @@ func depthwiseF32(X, W, bias []float32, N, C, H, Wi, KH, KW, OH, OW, strideH, st
 							r0 := xBase + ih0*Wi + iw0
 							r1 := r0 + Wi
 							r2 := r1 + Wi
+							_ = X[r2+2] // BCE hint
 							sum += X[r0]*w00 + X[r0+1]*w01 + X[r0+2]*w02
 							sum += X[r1]*w10 + X[r1+1]*w11 + X[r1+2]*w12
 							sum += X[r2]*w20 + X[r2+1]*w21 + X[r2+2]*w22

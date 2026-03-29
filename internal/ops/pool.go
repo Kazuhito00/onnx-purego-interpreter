@@ -74,6 +74,7 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 						iw := ow * 2
 						r0 := xBase + ih*W + iw
 						r1 := r0 + W
+						_ = xData[r1+1] // BCE hint
 						v0 := xData[r0]; v1 := xData[r0+1]
 						v2 := xData[r1]; v3 := xData[r1+1]
 						m := v0
@@ -125,6 +126,8 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 	// General path
 	for n := 0; n < N; n++ {
 		for c := 0; c < C; c++ {
+			xBase := n*C*H*W + c*H*W
+			oBase := n*C*OH*OW + c*OH*OW
 			for oh := 0; oh < OH; oh++ {
 				for ow := 0; ow < OW; ow++ {
 					first := true
@@ -134,7 +137,7 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 							ih := oh*strideH - padTop + kh
 							iw := ow*strideW - padLeft + kw
 							if ih >= 0 && ih < H && iw >= 0 && iw < W {
-								v := xData[n*C*H*W+c*H*W+ih*W+iw]
+								v := xData[xBase+ih*W+iw]
 								if first || v > maxVal {
 									first = false
 									maxVal = v
@@ -142,7 +145,7 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 							}
 						}
 					}
-					outData[n*C*OH*OW+c*OH*OW+oh*OW+ow] = maxVal
+					outData[oBase+oh*OW+ow] = maxVal
 				}
 			}
 		}
@@ -200,6 +203,8 @@ func avgPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 
 	for n := 0; n < N; n++ {
 		for c := 0; c < C; c++ {
+			xBase := n*C*H*W + c*H*W
+			oBase := n*C*OH*OW + c*OH*OW
 			for oh := 0; oh < OH; oh++ {
 				for ow := 0; ow < OW; ow++ {
 					var sum float64
@@ -209,7 +214,7 @@ func avgPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 							ih := oh*strideH - padTop + kh
 							iw := ow*strideW - padLeft + kw
 							if ih >= 0 && ih < H && iw >= 0 && iw < W {
-								sum += float64(xData[n*C*H*W+c*H*W+ih*W+iw])
+								sum += float64(xData[xBase+ih*W+iw])
 								count++
 							} else if countIncludePad {
 								count++
@@ -217,7 +222,7 @@ func avgPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 						}
 					}
 					if count > 0 {
-						outData[n*C*OH*OW+c*OH*OW+oh*OW+ow] = T(sum / float64(count))
+						outData[oBase+oh*OW+ow] = T(sum / float64(count))
 					}
 				}
 			}
@@ -260,8 +265,9 @@ func globalAvgPool[T tensor.Numeric](x *tensor.Dense[T]) *tensor.Dense[T] {
 		for c := 0; c < C; c++ {
 			var sum float64
 			base := n*C*spatialSize + c*spatialSize
+			xSlice := xData[base : base+spatialSize : base+spatialSize] // BCE
 			for i := 0; i < spatialSize; i++ {
-				sum += float64(xData[base+i])
+				sum += float64(xSlice[i])
 			}
 			outData[n*C+c] = T(sum / float64(spatialSize))
 		}

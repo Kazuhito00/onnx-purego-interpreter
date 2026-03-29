@@ -56,8 +56,10 @@ func binaryOp[T tensor.Numeric](a, b *tensor.Dense[T], fn func(T, T) T) (*tensor
 				for c := 0; c < C; c++ {
 					bv := bd[c]
 					off := n*C*HW + c*HW
+					dSlice := data[off : off+HW : off+HW] // BCE
+					aSlice := ad[off : off+HW : off+HW]   // BCE
 					for i := 0; i < HW; i++ {
-						data[off+i] = fn(ad[off+i], bv)
+						dSlice[i] = fn(aSlice[i], bv)
 					}
 				}
 			}
@@ -72,8 +74,10 @@ func binaryOp[T tensor.Numeric](a, b *tensor.Dense[T], fn func(T, T) T) (*tensor
 				for c := 0; c < C; c++ {
 					av := ad[c]
 					off := n*C*HW + c*HW
+					dSlice := data[off : off+HW : off+HW] // BCE
+					bSlice := bd[off : off+HW : off+HW]   // BCE
 					for i := 0; i < HW; i++ {
-						data[off+i] = fn(av, bd[off+i])
+						dSlice[i] = fn(av, bSlice[i])
 					}
 				}
 			}

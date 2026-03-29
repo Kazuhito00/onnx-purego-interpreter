@@ -339,8 +339,9 @@ func conv2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T], node *i
 					for oc := 0; oc < OC; oc++ {
 						bv := bf[oc]
 						off := oBase + oc*HW
+						oSlice := outData[off : off+HW : off+HW] // BCE
 						for i := 0; i < HW; i++ {
-							outData[off+i] += bv
+							oSlice[i] += bv
 						}
 					}
 				}
@@ -575,8 +576,10 @@ addBias:
 			for oc := 0; oc < OC; oc++ {
 				bv := bias[oc]
 				base := (n*OC + oc) * OH * OW
-				for i := 0; i < OH*OW; i++ {
-					outData[base+i] += bv
+				hw := OH * OW
+				oSlice := outData[base : base+hw : base+hw] // BCE
+				for i := 0; i < hw; i++ {
+					oSlice[i] += bv
 				}
 			}
 		}
@@ -590,8 +593,9 @@ func addBiasGroup[T tensor.Numeric](out []T, bias []T, ocPerGroup, patchSize int
 	for oc := 0; oc < ocPerGroup; oc++ {
 		bv := bias[oc]
 		off := oc * patchSize
+		oSlice := out[off : off+patchSize : off+patchSize] // BCE
 		for i := 0; i < patchSize; i++ {
-			out[off+i] += bv
+			oSlice[i] += bv
 		}
 	}
 }
@@ -703,14 +707,14 @@ func gemmNN[T tensor.Numeric](A, B, C []T, M, N, K int) {
 		return
 	}
 	for i := 0; i < M; i++ {
-		cRow := C[i*N : i*N+N]
+		cRow := C[i*N : i*N+N : i*N+N] // BCE
 		aBase := i * K
 		for k := 0; k < K; k++ {
 			aik := A[aBase+k]
 			if aik == 0 {
 				continue
 			}
-			bRow := B[k*N : k*N+N]
+			bRow := B[k*N : k*N+N : k*N+N] // BCE
 			for j := 0; j < N; j++ {
 				cRow[j] += aik * bRow[j]
 			}
@@ -731,14 +735,14 @@ func gemmTiledGeneric[T tensor.Numeric](A, B, C []T, M, N, K int) {
 				jEnd := min(j0+tN, N)
 				jLen := jEnd - j0
 				for i := i0; i < iEnd; i++ {
-					cRow := C[i*N+j0 : i*N+jEnd]
+					cRow := C[i*N+j0 : i*N+jEnd : i*N+jEnd] // BCE
 					aBase := i * K
 					for k := k0; k < kEnd; k++ {
 						aik := A[aBase+k]
 						if aik == 0 {
 							continue
 						}
-						bRow := B[k*N+j0 : k*N+jEnd]
+						bRow := B[k*N+j0 : k*N+jEnd : k*N+jEnd] // BCE
 						for j := 0; j < jLen; j++ {
 							cRow[j] += aik * bRow[j]
 						}

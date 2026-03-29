@@ -32,6 +32,7 @@ func lrnF32(x *tensor.Dense[float32], size int, alpha, beta, bias float64) *tens
 	half := size / 2
 
 	for n := 0; n < N; n++ {
+		nBase := n * C * HW
 		for c := 0; c < C; c++ {
 			cStart := c - half
 			if cStart < 0 {
@@ -42,10 +43,10 @@ func lrnF32(x *tensor.Dense[float32], size int, alpha, beta, bias float64) *tens
 				cEnd = C
 			}
 			for hw := 0; hw < HW; hw++ {
-				idx := n*C*HW + c*HW + hw
+				idx := nBase + c*HW + hw
 				var sqSum float64
 				for cc := cStart; cc < cEnd; cc++ {
-					v := float64(data[n*C*HW+cc*HW+hw])
+					v := float64(data[nBase+cc*HW+hw])
 					sqSum += v * v
 				}
 				norm := math.Pow(bias+alpha/float64(size)*sqSum, beta)
@@ -104,8 +105,10 @@ func batchNorm[T tensor.Numeric](x, scale, bias, mean, variance *tensor.Dense[T]
 			invStd := s / math.Sqrt(v+epsilon)
 
 			base := n*C*spatialSize + c*spatialSize
+			xSlice := xData[base : base+spatialSize] // BCE
+			oSlice := outData[base : base+spatialSize] // BCE
 			for i := 0; i < spatialSize; i++ {
-				outData[base+i] = T((float64(xData[base+i])-m)*invStd + b)
+				oSlice[i] = T((float64(xSlice[i])-m)*invStd + b)
 			}
 		}
 	}
@@ -148,24 +151,26 @@ func layerNormF32(x, scale, bias *tensor.Dense[float32], axis int, epsilon float
 
 	for o := 0; o < outerSize; o++ {
 		base := o * innerSize
+		xSlice := xData[base : base+innerSize] // BCE
+		oSlice := out[base : base+innerSize]    // BCE
 		// Compute mean
 		var sum float64
-		for i := 0; i < innerSize; i++ { sum += float64(xData[base+i]) }
+		for i := 0; i < innerSize; i++ { sum += float64(xSlice[i]) }
 		mean := sum / float64(innerSize)
 		// Compute variance
 		var varSum float64
 		for i := 0; i < innerSize; i++ {
-			d := float64(xData[base+i]) - mean
+			d := float64(xSlice[i]) - mean
 			varSum += d * d
 		}
 		variance := varSum / float64(innerSize)
 		invStd := 1.0 / math.Sqrt(variance+epsilon)
 
 		for i := 0; i < innerSize; i++ {
-			v := (float64(xData[base+i]) - mean) * invStd
+			v := (float64(xSlice[i]) - mean) * invStd
 			v *= float64(scaleData[i])
 			if biasData != nil { v += float64(biasData[i]) }
-			out[base+i] = float32(v)
+			oSlice[i] = float32(v)
 		}
 	}
 	return tensor.NewDense[float32](shape.Clone(), out)
@@ -202,16 +207,18 @@ func instanceNormF32(x, scale, bias *tensor.Dense[float32], epsilon float64) *te
 	for n := 0; n < N; n++ {
 		for c := 0; c < C; c++ {
 			base := n*C*spatialSize + c*spatialSize
+			xSlice := xData[base : base+spatialSize] // BCE
+			oSlice := out[base : base+spatialSize]    // BCE
 			// Compute mean
 			var sum float64
 			for i := 0; i < spatialSize; i++ {
-				sum += float64(xData[base+i])
+				sum += float64(xSlice[i])
 			}
 			mean := sum / float64(spatialSize)
 			// Compute variance
 			var varSum float64
 			for i := 0; i < spatialSize; i++ {
-				d := float64(xData[base+i]) - mean
+				d := float64(xSlice[i]) - mean
 				varSum += d * d
 			}
 			variance := varSum / float64(spatialSize)
@@ -220,7 +227,7 @@ func instanceNormF32(x, scale, bias *tensor.Dense[float32], epsilon float64) *te
 			sc := float64(scaleData[c])
 			b := float64(biasData[c])
 			for i := 0; i < spatialSize; i++ {
-				out[base+i] = float32((float64(xData[base+i])-mean)*invStd*sc + b)
+				oSlice[i] = float32((float64(xSlice[i])-mean)*invStd*sc + b)
 			}
 		}
 	}

@@ -29,8 +29,8 @@ func gemmF32Attention(A, B, C []float32, M, N, K int) {
 
 func gemmF32PreciseSmall(A, B, C []float32, M, N, K int) {
 	for i := 0; i < M; i++ {
-		cRow := C[i*N : i*N+N]
-		aRow := A[i*K : i*K+K]
+		cRow := C[i*N : i*N+N : i*N+N] // BCE
+		aRow := A[i*K : i*K+K : i*K+K] // BCE
 		for j := 0; j < N; j++ {
 			var sum float64
 			for k := 0; k < K; k++ {
@@ -55,14 +55,14 @@ func tiledGemm[T tensor.Numeric](A, B, C []T, M, N, K int) {
 					jEnd := min(j0+tN, N)
 					jLen := jEnd - j0
 					for i := i0; i < iEnd; i++ {
-						cRow := C[i*N+j0 : i*N+jEnd]
+						cRow := C[i*N+j0 : i*N+jEnd : i*N+jEnd] // BCE
 						aBase := i * K
 						for k := k0; k < kEnd; k++ {
 							aik := A[aBase+k]
 							if aik == 0 {
 								continue
 							}
-							bRow := B[k*N+j0 : k*N+jEnd]
+							bRow := B[k*N+j0 : k*N+jEnd : k*N+jEnd] // BCE
 							for j := 0; j < jLen; j++ {
 								cRow[j] += aik * bRow[j]
 							}
@@ -73,14 +73,14 @@ func tiledGemm[T tensor.Numeric](A, B, C []T, M, N, K int) {
 		}
 	} else {
 		for i := 0; i < M; i++ {
-			cRow := C[i*N : i*N+N]
+			cRow := C[i*N : i*N+N : i*N+N] // BCE
 			aBase := i * K
 			for k := 0; k < K; k++ {
 				aik := A[aBase+k]
 				if aik == 0 {
 					continue
 				}
-				bRow := B[k*N : k*N+N]
+				bRow := B[k*N : k*N+N : k*N+N] // BCE
 				for j := 0; j < N; j++ {
 					cRow[j] += aik * bRow[j]
 				}
@@ -199,9 +199,10 @@ func doMatMul[T tensor.Numeric](a, b *tensor.Dense[T]) (*tensor.Dense[T], error)
 		data := make([]T, M)
 		ad, bd := a.Data(), b.Data()
 		for i := 0; i < M; i++ {
+			aRow := ad[i*K : i*K+K : i*K+K] // BCE
 			var sum T
 			for k := 0; k < K; k++ {
-				sum += ad[i*K+k] * bd[k]
+				sum += aRow[k] * bd[k]
 			}
 			data[i] = sum
 		}
@@ -320,13 +321,13 @@ func doMatMul[T tensor.Numeric](a, b *tensor.Dense[T]) (*tensor.Dense[T], error)
 			bOff := bIdx * bMatSize
 			oOff := batch * outMatSize
 			for i := 0; i < M; i++ {
-				cRow := outData[oOff+i*N : oOff+i*N+N]
+				cRow := outData[oOff+i*N : oOff+i*N+N : oOff+i*N+N] // BCE
 				for k := 0; k < K; k++ {
 					aik := ad[aOff+i*K+k]
 					if aik == 0 {
 						continue
 					}
-					bRow := bd[bOff+k*N : bOff+k*N+N]
+					bRow := bd[bOff+k*N : bOff+k*N+N : bOff+k*N+N] // BCE
 					for j := 0; j < N; j++ {
 						cRow[j] += aik * bRow[j]
 					}
@@ -402,13 +403,13 @@ func doGemm[T tensor.Numeric](a, b, c *tensor.Dense[T], alpha, beta T, transA, t
 	switch {
 	case !transA && !transB:
 		for i := 0; i < M; i++ {
-			cRow := data[i*N : i*N+N]
+			cRow := data[i*N : i*N+N : i*N+N] // BCE
 			for k := 0; k < K; k++ {
 				aik := alpha * ad[i*aStride+k]
 				if aik == 0 {
 					continue
 				}
-				bRow := bd[k*bStride : k*bStride+N]
+				bRow := bd[k*bStride : k*bStride+N : k*bStride+N] // BCE
 				for j := 0; j < N; j++ {
 					cRow[j] += aik * bRow[j]
 				}
@@ -416,10 +417,10 @@ func doGemm[T tensor.Numeric](a, b, c *tensor.Dense[T], alpha, beta T, transA, t
 		}
 	case !transA && transB:
 		for i := 0; i < M; i++ {
-			cRow := data[i*N : i*N+N]
-			aRow := ad[i*aStride : i*aStride+K]
+			cRow := data[i*N : i*N+N : i*N+N]             // BCE
+			aRow := ad[i*aStride : i*aStride+K : i*aStride+K] // BCE
 			for j := 0; j < N; j++ {
-				bRow := bd[j*bStride : j*bStride+K]
+				bRow := bd[j*bStride : j*bStride+K : j*bStride+K] // BCE
 				var sum T
 				for k := 0; k < K; k++ {
 					sum += aRow[k] * bRow[k]
@@ -434,8 +435,8 @@ func doGemm[T tensor.Numeric](a, b, c *tensor.Dense[T], alpha, beta T, transA, t
 				if aik == 0 {
 					continue
 				}
-				cRow := data[i*N : i*N+N]
-				bRow := bd[k*bStride : k*bStride+N]
+				cRow := data[i*N : i*N+N : i*N+N]             // BCE
+				bRow := bd[k*bStride : k*bStride+N : k*bStride+N] // BCE
 				for j := 0; j < N; j++ {
 					cRow[j] += aik * bRow[j]
 				}
@@ -443,7 +444,7 @@ func doGemm[T tensor.Numeric](a, b, c *tensor.Dense[T], alpha, beta T, transA, t
 		}
 	case transA && transB:
 		for i := 0; i < M; i++ {
-			cRow := data[i*N : i*N+N]
+			cRow := data[i*N : i*N+N : i*N+N] // BCE
 			for j := 0; j < N; j++ {
 				var sum T
 				for k := 0; k < K; k++ {
@@ -461,8 +462,9 @@ func doGemm[T tensor.Numeric](a, b, c *tensor.Dense[T], alpha, beta T, transA, t
 		if cs.NDim() == 1 && cs[0] == N {
 			// C is [N], broadcast to [M, N]
 			for i := 0; i < M; i++ {
+				dRow := data[i*N : i*N+N : i*N+N] // BCE
 				for j := 0; j < N; j++ {
-					data[i*N+j] += beta * cd[j]
+					dRow[j] += beta * cd[j]
 				}
 			}
 		} else if cs.NDim() == 2 && cs[0] == M && cs[1] == N {

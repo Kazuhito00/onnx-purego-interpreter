@@ -111,14 +111,15 @@ func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 		a1k := a1[k]
 		a2k := a2[k]
 		a3k := a3[k]
-		b0 := B[bIdx]
-		b1 := B[bIdx+1]
-		b2 := B[bIdx+2]
-		b3 := B[bIdx+3]
-		b4 := B[bIdx+4]
-		b5 := B[bIdx+5]
-		b6 := B[bIdx+6]
-		b7 := B[bIdx+7]
+		bs := B[bIdx : bIdx+8 : bIdx+8] // BCE
+		b0 := bs[0]
+		b1 := bs[1]
+		b2 := bs[2]
+		b3 := bs[3]
+		b4 := bs[4]
+		b5 := bs[5]
+		b6 := bs[6]
+		b7 := bs[7]
 		c00 += a0k * b0
 		c01 += a0k * b1
 		c02 += a0k * b2
@@ -157,14 +158,15 @@ func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 		a1k = a1[k+1]
 		a2k = a2[k+1]
 		a3k = a3[k+1]
-		b0 = B[bIdx]
-		b1 = B[bIdx+1]
-		b2 = B[bIdx+2]
-		b3 = B[bIdx+3]
-		b4 = B[bIdx+4]
-		b5 = B[bIdx+5]
-		b6 = B[bIdx+6]
-		b7 = B[bIdx+7]
+		bs = B[bIdx : bIdx+8 : bIdx+8] // BCE
+		b0 = bs[0]
+		b1 = bs[1]
+		b2 = bs[2]
+		b3 = bs[3]
+		b4 = bs[4]
+		b5 = bs[5]
+		b6 = bs[6]
+		b7 = bs[7]
 		c00 += a0k * b0
 		c01 += a0k * b1
 		c02 += a0k * b2
@@ -203,14 +205,15 @@ func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 		a1k = a1[k+2]
 		a2k = a2[k+2]
 		a3k = a3[k+2]
-		b0 = B[bIdx]
-		b1 = B[bIdx+1]
-		b2 = B[bIdx+2]
-		b3 = B[bIdx+3]
-		b4 = B[bIdx+4]
-		b5 = B[bIdx+5]
-		b6 = B[bIdx+6]
-		b7 = B[bIdx+7]
+		bs = B[bIdx : bIdx+8 : bIdx+8] // BCE
+		b0 = bs[0]
+		b1 = bs[1]
+		b2 = bs[2]
+		b3 = bs[3]
+		b4 = bs[4]
+		b5 = bs[5]
+		b6 = bs[6]
+		b7 = bs[7]
 		c00 += a0k * b0
 		c01 += a0k * b1
 		c02 += a0k * b2
@@ -249,14 +252,15 @@ func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 		a1k = a1[k+3]
 		a2k = a2[k+3]
 		a3k = a3[k+3]
-		b0 = B[bIdx]
-		b1 = B[bIdx+1]
-		b2 = B[bIdx+2]
-		b3 = B[bIdx+3]
-		b4 = B[bIdx+4]
-		b5 = B[bIdx+5]
-		b6 = B[bIdx+6]
-		b7 = B[bIdx+7]
+		bs = B[bIdx : bIdx+8 : bIdx+8] // BCE
+		b0 = bs[0]
+		b1 = bs[1]
+		b2 = bs[2]
+		b3 = bs[3]
+		b4 = bs[4]
+		b5 = bs[5]
+		b6 = bs[6]
+		b7 = bs[7]
 		c00 += a0k * b0
 		c01 += a0k * b1
 		c02 += a0k * b2
@@ -297,14 +301,15 @@ func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 		a1k := a1[k]
 		a2k := a2[k]
 		a3k := a3[k]
-		b0 := B[bIdx]
-		b1 := B[bIdx+1]
-		b2 := B[bIdx+2]
-		b3 := B[bIdx+3]
-		b4 := B[bIdx+4]
-		b5 := B[bIdx+5]
-		b6 := B[bIdx+6]
-		b7 := B[bIdx+7]
+		bs := B[bIdx : bIdx+8 : bIdx+8] // BCE
+		b0 := bs[0]
+		b1 := bs[1]
+		b2 := bs[2]
+		b3 := bs[3]
+		b4 := bs[4]
+		b5 := bs[5]
+		b6 := bs[6]
+		b7 := bs[7]
 		c00 += a0k * b0
 		c01 += a0k * b1
 		c02 += a0k * b2
@@ -389,20 +394,21 @@ func microKernel4x4(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 	var c10, c11, c12, c13 float32
 	var c20, c21, c22, c23 float32
 	var c30, c31, c32, c33 float32
-	a0 := A[i*lda+k0:]
-	a1 := A[(i+1)*lda+k0:]
-	a2 := A[(i+2)*lda+k0:]
-	a3 := A[(i+3)*lda+k0:]
+	a0 := A[i*lda+k0 : i*lda+k0+kLen : i*lda+k0+kLen]             // BCE
+	a1 := A[(i+1)*lda+k0 : (i+1)*lda+k0+kLen : (i+1)*lda+k0+kLen] // BCE
+	a2 := A[(i+2)*lda+k0 : (i+2)*lda+k0+kLen : (i+2)*lda+k0+kLen] // BCE
+	a3 := A[(i+3)*lda+k0 : (i+3)*lda+k0+kLen : (i+3)*lda+k0+kLen] // BCE
+	bIdx := k0*ldb + j
 	for k := 0; k < kLen; k++ {
-		bOff := (k0+k)*ldb + j
 		a0k := a0[k]
 		a1k := a1[k]
 		a2k := a2[k]
 		a3k := a3[k]
-		b0 := B[bOff]
-		b1 := B[bOff+1]
-		b2 := B[bOff+2]
-		b3 := B[bOff+3]
+		bSlice := B[bIdx : bIdx+4 : bIdx+4] // BCE
+		b0 := bSlice[0]
+		b1 := bSlice[1]
+		b2 := bSlice[2]
+		b3 := bSlice[3]
 		c00 += a0k * b0
 		c01 += a0k * b1
 		c02 += a0k * b2
@@ -419,47 +425,53 @@ func microKernel4x4(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 		c31 += a3k * b1
 		c32 += a3k * b2
 		c33 += a3k * b3
+		bIdx += ldb
 	}
 	o0 := i*ldb + j
-	C[o0] += c00
-	C[o0+1] += c01
-	C[o0+2] += c02
-	C[o0+3] += c03
+	cr0 := C[o0 : o0+4 : o0+4] // BCE
+	cr0[0] += c00
+	cr0[1] += c01
+	cr0[2] += c02
+	cr0[3] += c03
 	o1 := o0 + ldb
-	C[o1] += c10
-	C[o1+1] += c11
-	C[o1+2] += c12
-	C[o1+3] += c13
+	cr1 := C[o1 : o1+4 : o1+4] // BCE
+	cr1[0] += c10
+	cr1[1] += c11
+	cr1[2] += c12
+	cr1[3] += c13
 	o2 := o1 + ldb
-	C[o2] += c20
-	C[o2+1] += c21
-	C[o2+2] += c22
-	C[o2+3] += c23
+	cr2 := C[o2 : o2+4 : o2+4] // BCE
+	cr2[0] += c20
+	cr2[1] += c21
+	cr2[2] += c22
+	cr2[3] += c23
 	o3 := o2 + ldb
-	C[o3] += c30
-	C[o3+1] += c31
-	C[o3+2] += c32
-	C[o3+3] += c33
+	cr3 := C[o3 : o3+4 : o3+4] // BCE
+	cr3[0] += c30
+	cr3[1] += c31
+	cr3[2] += c32
+	cr3[3] += c33
 }
 
 // microKernel2x8: 16 accumulators for row remainder
 func microKernel2x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 	var c00, c01, c02, c03, c04, c05, c06, c07 float32
 	var c10, c11, c12, c13, c14, c15, c16, c17 float32
-	a0 := A[i*lda+k0:]
-	a1 := A[(i+1)*lda+k0:]
+	a0 := A[i*lda+k0 : i*lda+k0+kLen : i*lda+k0+kLen]             // BCE
+	a1 := A[(i+1)*lda+k0 : (i+1)*lda+k0+kLen : (i+1)*lda+k0+kLen] // BCE
+	bIdx := k0*ldb + j
 	for k := 0; k < kLen; k++ {
-		bOff := (k0+k)*ldb + j
 		a0k := a0[k]
 		a1k := a1[k]
-		b0 := B[bOff]
-		b1 := B[bOff+1]
-		b2 := B[bOff+2]
-		b3 := B[bOff+3]
-		b4 := B[bOff+4]
-		b5 := B[bOff+5]
-		b6 := B[bOff+6]
-		b7 := B[bOff+7]
+		bSlice := B[bIdx : bIdx+8 : bIdx+8] // BCE
+		b0 := bSlice[0]
+		b1 := bSlice[1]
+		b2 := bSlice[2]
+		b3 := bSlice[3]
+		b4 := bSlice[4]
+		b5 := bSlice[5]
+		b6 := bSlice[6]
+		b7 := bSlice[7]
 		c00 += a0k * b0
 		c01 += a0k * b1
 		c02 += a0k * b2
@@ -476,68 +488,77 @@ func microKernel2x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 		c15 += a1k * b5
 		c16 += a1k * b6
 		c17 += a1k * b7
+		bIdx += ldb
 	}
 	o0 := i*ldb + j
-	C[o0] += c00
-	C[o0+1] += c01
-	C[o0+2] += c02
-	C[o0+3] += c03
-	C[o0+4] += c04
-	C[o0+5] += c05
-	C[o0+6] += c06
-	C[o0+7] += c07
+	cr0 := C[o0 : o0+8 : o0+8] // BCE
+	cr0[0] += c00
+	cr0[1] += c01
+	cr0[2] += c02
+	cr0[3] += c03
+	cr0[4] += c04
+	cr0[5] += c05
+	cr0[6] += c06
+	cr0[7] += c07
 	o1 := o0 + ldb
-	C[o1] += c10
-	C[o1+1] += c11
-	C[o1+2] += c12
-	C[o1+3] += c13
-	C[o1+4] += c14
-	C[o1+5] += c15
-	C[o1+6] += c16
-	C[o1+7] += c17
+	cr1 := C[o1 : o1+8 : o1+8] // BCE
+	cr1[0] += c10
+	cr1[1] += c11
+	cr1[2] += c12
+	cr1[3] += c13
+	cr1[4] += c14
+	cr1[5] += c15
+	cr1[6] += c16
+	cr1[7] += c17
 }
 
 // microKernel1x8: 8 accumulators for single row remainder
 func microKernel1x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 	var c0, c1, c2, c3, c4, c5, c6, c7 float32
-	aRow := A[i*lda+k0:]
+	aRow := A[i*lda+k0 : i*lda+k0+kLen : i*lda+k0+kLen] // BCE
+	bIdx := k0*ldb + j
 	for k := 0; k < kLen; k++ {
 		aik := aRow[k]
-		bOff := (k0+k)*ldb + j
-		c0 += aik * B[bOff]
-		c1 += aik * B[bOff+1]
-		c2 += aik * B[bOff+2]
-		c3 += aik * B[bOff+3]
-		c4 += aik * B[bOff+4]
-		c5 += aik * B[bOff+5]
-		c6 += aik * B[bOff+6]
-		c7 += aik * B[bOff+7]
+		bSlice := B[bIdx : bIdx+8 : bIdx+8] // BCE
+		c0 += aik * bSlice[0]
+		c1 += aik * bSlice[1]
+		c2 += aik * bSlice[2]
+		c3 += aik * bSlice[3]
+		c4 += aik * bSlice[4]
+		c5 += aik * bSlice[5]
+		c6 += aik * bSlice[6]
+		c7 += aik * bSlice[7]
+		bIdx += ldb
 	}
 	o := i*ldb + j
-	C[o] += c0
-	C[o+1] += c1
-	C[o+2] += c2
-	C[o+3] += c3
-	C[o+4] += c4
-	C[o+5] += c5
-	C[o+6] += c6
-	C[o+7] += c7
+	cr := C[o : o+8 : o+8] // BCE
+	cr[0] += c0
+	cr[1] += c1
+	cr[2] += c2
+	cr[3] += c3
+	cr[4] += c4
+	cr[5] += c5
+	cr[6] += c6
+	cr[7] += c7
 }
 
 // microKernelMxN: generic small M x N remainder kernel
 func microKernelMxN(A, B, C []float32, i, j, k0, kLen, lda, ldb, mR, nR int) {
 	for ii := 0; ii < mR; ii++ {
-		aRow := A[(i+ii)*lda+k0:]
-		cOff := (i+ii)*ldb + j
+		aRow := A[(i+ii)*lda+k0 : (i+ii)*lda+k0+kLen : (i+ii)*lda+k0+kLen] // BCE
+		cSlice := C[(i+ii)*ldb+j : (i+ii)*ldb+j+nR : (i+ii)*ldb+j+nR]     // BCE
+		bIdx := k0*ldb + j
 		for k := 0; k < kLen; k++ {
 			aik := aRow[k]
 			if aik == 0 {
+				bIdx += ldb
 				continue
 			}
-			bOff := (k0+k)*ldb + j
+			bSlice := B[bIdx : bIdx+nR : bIdx+nR] // BCE
 			for jj := 0; jj < nR; jj++ {
-				C[cOff+jj] += aik * B[bOff+jj]
+				cSlice[jj] += aik * bSlice[jj]
 			}
+			bIdx += ldb
 		}
 	}
 }
@@ -547,7 +568,7 @@ func gemmF32WithBias(A, B, C []float32, M, N, K int, bias []float32) {
 	gemmF32(A, B, C, M, N, K)
 	for i := 0; i < M; i++ {
 		bv := bias[i]
-		cRow := C[i*N : i*N+N]
+		cRow := C[i*N : i*N+N : i*N+N] // BCE
 		for j := 0; j < N; j++ {
 			cRow[j] += bv
 		}
