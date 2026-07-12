@@ -11,7 +11,7 @@ type KernelConfig struct {
 	UseDepthwiseKernel   bool // depthwise 3x3 specialized kernel
 	Use1x1FastPath       bool // 1x1 Conv direct GEMM (skip im2col)
 	UseConvTransposeGEMM bool // GEMM-based ConvTranspose (vs naive 7-nested loop)
-	UsePoolFastPath      bool // MaxPool 2x2s2 / 3x3s2 specialization
+	UsePoolFastPath      bool // MaxPool 2x2s1/s2 / 3x3s2 specialization
 	UseFastErf           bool // polynomial erf approximation in FastGELU
 	UseParallelConv      bool // goroutine parallelism for large Conv
 	MaxThreads           int  // max goroutines for parallel ops (0 = runtime.GOMAXPROCS)

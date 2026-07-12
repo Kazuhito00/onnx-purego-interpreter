@@ -54,8 +54,8 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 
 	padTop, padLeft, padBottom, padRight := computePads(node, H, W, KH, KW, strideH, strideW)
 
-	OH := (H + padTop + padBottom - KH) / strideH + 1
-	OW := (W + padLeft + padRight - KW) / strideW + 1
+	OH := (H+padTop+padBottom-KH)/strideH + 1
+	OW := (W+padLeft+padRight-KW)/strideW + 1
 
 	outShape := tensor.Shape{N, C, OH, OW}
 	outData := make([]T, outShape.Size())
@@ -75,12 +75,20 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 						r0 := xBase + ih*W + iw
 						r1 := r0 + W
 						_ = xData[r1+1] // BCE hint
-						v0 := xData[r0]; v1 := xData[r0+1]
-						v2 := xData[r1]; v3 := xData[r1+1]
+						v0 := xData[r0]
+						v1 := xData[r0+1]
+						v2 := xData[r1]
+						v3 := xData[r1+1]
 						m := v0
-						if v1 > m { m = v1 }
-						if v2 > m { m = v2 }
-						if v3 > m { m = v3 }
+						if v1 > m {
+							m = v1
+						}
+						if v2 > m {
+							m = v2
+						}
+						if v3 > m {
+							m = v3
+						}
 						outData[oBase+oh*OW+ow] = m
 					}
 				}
@@ -89,6 +97,35 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 		return tensor.NewDense[T](outShape, outData), nil
 	}
 
+	// Fast path: 2x2 stride 1, no padding.
+	if usePoolFP && KH == 2 && KW == 2 && strideH == 1 && strideW == 1 &&
+		padTop == 0 && padLeft == 0 && padBottom == 0 && padRight == 0 {
+		for n := 0; n < N; n++ {
+			for c := 0; c < C; c++ {
+				xBase := (n*C + c) * H * W
+				oBase := (n*C + c) * OH * OW
+				for oh := 0; oh < OH; oh++ {
+					r0, r1 := xBase+oh*W, xBase+(oh+1)*W
+					for ow := 0; ow < OW; ow++ {
+						v0, v1 := xData[r0+ow], xData[r0+ow+1]
+						v2, v3 := xData[r1+ow], xData[r1+ow+1]
+						m := v0
+						if v1 > m {
+							m = v1
+						}
+						if v2 > m {
+							m = v2
+						}
+						if v3 > m {
+							m = v3
+						}
+						outData[oBase+oh*OW+ow] = m
+					}
+				}
+			}
+		}
+		return tensor.NewDense[T](outShape, outData), nil
+	}
 	// Fast path: 3x3 stride 2 (with or without padding)
 	if usePoolFP && KH == 3 && KW == 3 && strideH == 2 && strideW == 2 {
 		for n := 0; n < N; n++ {
@@ -103,11 +140,15 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 						var maxVal T
 						for kh := 0; kh < 3; kh++ {
 							ih := ih0 + kh
-							if ih < 0 || ih >= H { continue }
+							if ih < 0 || ih >= H {
+								continue
+							}
 							row := xBase + ih*W
 							for kw := 0; kw < 3; kw++ {
 								iw := iw0 + kw
-								if iw < 0 || iw >= W { continue }
+								if iw < 0 || iw >= W {
+									continue
+								}
 								v := xData[row+iw]
 								if first || v > maxVal {
 									first = false
@@ -194,8 +235,8 @@ func avgPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 
 	countIncludePad := node.GetAttrInt("count_include_pad", 0) != 0
 
-	OH := (H + padTop + padBottom - KH) / strideH + 1
-	OW := (W + padLeft + padRight - KW) / strideW + 1
+	OH := (H+padTop+padBottom-KH)/strideH + 1
+	OW := (W+padLeft+padRight-KW)/strideW + 1
 
 	outShape := tensor.Shape{N, C, OH, OW}
 	outData := make([]T, outShape.Size())

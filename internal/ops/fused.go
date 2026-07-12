@@ -15,7 +15,10 @@ func fastErfF32(x float32) float32 {
 	const a1, a2, a3, a4, a5 = 0.254829592, -0.284496736, 1.421413741, -1.453152027, 1.061405429
 	const p = 0.3275911
 	sign := float32(1)
-	if x < 0 { sign = -1; x = -x }
+	if x < 0 {
+		sign = -1
+		x = -x
+	}
 	t := 1.0 / (1.0 + p*x)
 	y := 1.0 - (((((a5*t+a4)*t)+a3)*t+a2)*t+a1)*t*float32(math.Exp(float64(-x*x)))
 	return sign * y
@@ -94,12 +97,39 @@ func opFusedMatMul(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, erro
 func opFusedAffine(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error) {
 	x, scale, bias := inputs[0], inputs[1], inputs[2]
 
+	// Scalar affine is common after CNN activations. Compute it in one pass to
+	// avoid materializing the intermediate X*scale tensor.
+	switch xt := x.(type) {
+	case *tensor.Dense[float32]:
+		st, sok := scale.(*tensor.Dense[float32])
+		bt, bok := bias.(*tensor.Dense[float32])
+		if sok && bok && st.Len() == 1 && bt.Len() == 1 {
+			out := make([]float32, xt.Len())
+			s, b := st.Data()[0], bt.Data()[0]
+			for i, v := range xt.Data() {
+				out[i] = v*s + b
+			}
+			return []tensor.Tensor{tensor.NewDense[float32](xt.Shape(), out)}, nil
+		}
+	case *tensor.Dense[float64]:
+		st, sok := scale.(*tensor.Dense[float64])
+		bt, bok := bias.(*tensor.Dense[float64])
+		if sok && bok && st.Len() == 1 && bt.Len() == 1 {
+			out := make([]float64, xt.Len())
+			s, b := st.Data()[0], bt.Data()[0]
+			for i, v := range xt.Data() {
+				out[i] = v*s + b
+			}
+			return []tensor.Tensor{tensor.NewDense[float64](xt.Shape(), out)}, nil
+		}
+	}
+
 	// Compute X * scale
 	scaled, err := dispatchBinaryOp([]tensor.Tensor{x, scale},
-		func(a, b float32) float32 { return a*b },
-		func(a, b float64) float64 { return a*b },
-		func(a, b int32) int32 { return a*b },
-		func(a, b int64) int64 { return a*b },
+		func(a, b float32) float32 { return a * b },
+		func(a, b float64) float64 { return a * b },
+		func(a, b int32) int32 { return a * b },
+		func(a, b int64) int64 { return a * b },
 	)
 	if err != nil {
 		return nil, fmt.Errorf("FusedAffine mul: %w", err)
@@ -107,10 +137,10 @@ func opFusedAffine(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, erro
 
 	// Add bias
 	result, err := dispatchBinaryOp([]tensor.Tensor{scaled, bias},
-		func(a, b float32) float32 { return a+b },
-		func(a, b float64) float64 { return a+b },
-		func(a, b int32) int32 { return a+b },
-		func(a, b int64) int64 { return a+b },
+		func(a, b float32) float32 { return a + b },
+		func(a, b float64) float64 { return a + b },
+		func(a, b int32) int32 { return a + b },
+		func(a, b int64) int64 { return a + b },
 	)
 	if err != nil {
 		return nil, fmt.Errorf("FusedAffine add: %w", err)

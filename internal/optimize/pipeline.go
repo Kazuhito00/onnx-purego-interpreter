@@ -22,6 +22,7 @@ type PassResult struct {
 
 var pipeline = []passDef{
 	{name: "materialize_constants", run: materializeConstants},
+	{name: "fuse_pad_conv", run: fusePadConv},
 	{name: "eliminate_dropout", run: eliminateDropout},
 	{name: "eliminate_identity", run: eliminateIdentity},
 	{name: "fuse_conv_batchnorm", run: fuseConvBatchNorm},
@@ -31,6 +32,7 @@ var pipeline = []passDef{
 	{name: "fuse_mul_add_affine", run: fuseMulAddAffine},
 	{name: "fuse_gelu", run: fuseGELU},
 	{name: "fuse_conv_silu", run: fuseConvSiLU},
+	{name: "fuse_conv_affine", run: fuseConvAffine},
 	{name: "eliminate_dead_nodes", run: eliminateDeadNodes},
 }
 

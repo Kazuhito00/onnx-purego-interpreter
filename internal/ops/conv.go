@@ -58,6 +58,8 @@ func opFusedConv(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error)
 	}
 
 	activation := node.GetAttrString("activation", "none")
+	postScale := node.GetAttrFloat("post_scale", 1)
+	postBias := node.GetAttrFloat("post_bias", 0)
 	switch activation {
 	case "relu":
 		out := results[0]
@@ -111,13 +113,33 @@ func opFusedConv(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error)
 		case *tensor.Dense[float32]:
 			data := t.Data()
 			for i, v := range data {
-				if v < 0 { data[i] = v * alpha }
+				if v < 0 {
+					data[i] = v * alpha
+				}
 			}
 		case *tensor.Dense[float64]:
 			data := t.Data()
 			a64 := float64(alpha)
 			for i, v := range data {
-				if v < 0 { data[i] = v * a64 }
+				if v < 0 {
+					data[i] = v * a64
+				}
+			}
+		}
+	}
+
+	if postScale != 1 || postBias != 0 {
+		switch t := results[0].(type) {
+		case *tensor.Dense[float32]:
+			data := t.Data()
+			for i, v := range data {
+				data[i] = v*postScale + postBias
+			}
+		case *tensor.Dense[float64]:
+			data := t.Data()
+			s, b := float64(postScale), float64(postBias)
+			for i, v := range data {
+				data[i] = v*s + b
 			}
 		}
 	}
@@ -330,7 +352,31 @@ func conv2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T], node *i
 				// X[n] is [C, H*W], W is [OC, C] — GEMM: W × X[n] → out[n]
 				xSlice := xf[n*C*HW : (n+1)*C*HW]
 				oSlice := outData[n*OC*HW : (n+1)*OC*HW]
-				gemmF32(wf, xSlice, oSlice, OC, HW, C)
+				work := OC * HW * C
+				if work > 500_000 && OC >= 16 && (kc == nil || kc.UseParallelConv) {
+					cfg := kc
+					if cfg == nil {
+						cfg = DefaultKernelConfig()
+					}
+					nWorkers := min(cfg.Workers(), OC)
+					chunk := ((OC+nWorkers-1)/nWorkers + 3) &^ 3
+					var wg sync.WaitGroup
+					for worker := 0; worker < nWorkers; worker++ {
+						start := worker * chunk
+						end := min(start+chunk, OC)
+						if start >= end {
+							break
+						}
+						wg.Add(1)
+						go func(start, end int) {
+							defer wg.Done()
+							gemmF32(wf[start*C:end*C], xSlice, oSlice[start*HW:end*HW], end-start, HW, C)
+						}(start, end)
+					}
+					wg.Wait()
+				} else {
+					gemmF32(wf, xSlice, oSlice, OC, HW, C)
+				}
 			}
 			if b != nil {
 				bf := any(b.Data()).([]float32)
@@ -485,52 +531,52 @@ func convTranspose2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T]
 	// For each spatial position (ih, iw): output = W^T × x_vec → scatter to output
 	useConvTrGEMM := activeConvConfig == nil || activeConvConfig.UseConvTransposeGEMM
 	if useConvTrGEMM {
-	if xf, ok := any(xData).([]float32); ok && group == 1 {
-		wf := any(wData).([]float32)
-		of := any(outData).([]float32)
-		colSize := OC * KH * KW // = ocPerGroup * KH * KW since group=1
+		if xf, ok := any(xData).([]float32); ok && group == 1 {
+			wf := any(wData).([]float32)
+			of := any(outData).([]float32)
+			colSize := OC * KH * KW // = ocPerGroup * KH * KW since group=1
 
-		// Precompute W transposed: W[IC, OC*KH*KW] → WT[OC*KH*KW, IC]
-		wt := make([]float32, colSize*C)
-		for ic := 0; ic < C; ic++ {
-			for ock := 0; ock < colSize; ock++ {
-				wt[ock*C+ic] = wf[ic*colSize+ock]
+			// Precompute W transposed: W[IC, OC*KH*KW] → WT[OC*KH*KW, IC]
+			wt := make([]float32, colSize*C)
+			for ic := 0; ic < C; ic++ {
+				for ock := 0; ock < colSize; ock++ {
+					wt[ock*C+ic] = wf[ic*colSize+ock]
+				}
 			}
-		}
 
-		HW := H * W
-		for n := 0; n < N; n++ {
-			// GEMM: WT[colSize, C] × X[C, H*W] → col[colSize, H*W]
-			xOff := n * C * HW
-			col := make([]float32, colSize*HW)
-			gemmF32(wt, xf[xOff:xOff+C*HW], col, colSize, HW, C)
+			HW := H * W
+			for n := 0; n < N; n++ {
+				// GEMM: WT[colSize, C] × X[C, H*W] → col[colSize, H*W]
+				xOff := n * C * HW
+				col := make([]float32, colSize*HW)
+				gemmF32(wt, xf[xOff:xOff+C*HW], col, colSize, HW, C)
 
-			// col2im: scatter col[OC*KH*KW, H*W] → output[OC, OH, OW]
-			oOff := n * OC * OH * OW
-			for ih := 0; ih < H; ih++ {
-				for iw := 0; iw < W; iw++ {
-					colIdx := ih*W + iw
-					for oc := 0; oc < OC; oc++ {
-						for kh := 0; kh < KH; kh++ {
-							oh := ih*strideH - padTop + kh*dilH
-							if oh < 0 || oh >= OH {
-								continue
-							}
-							for kw := 0; kw < KW; kw++ {
-								ow := iw*strideW - padLeft + kw*dilW
-								if ow < 0 || ow >= OW {
+				// col2im: scatter col[OC*KH*KW, H*W] → output[OC, OH, OW]
+				oOff := n * OC * OH * OW
+				for ih := 0; ih < H; ih++ {
+					for iw := 0; iw < W; iw++ {
+						colIdx := ih*W + iw
+						for oc := 0; oc < OC; oc++ {
+							for kh := 0; kh < KH; kh++ {
+								oh := ih*strideH - padTop + kh*dilH
+								if oh < 0 || oh >= OH {
 									continue
 								}
-								ci := (oc*KH+kh)*KW + kw
-								of[oOff+(oc*OH+oh)*OW+ow] += col[ci*HW+colIdx]
+								for kw := 0; kw < KW; kw++ {
+									ow := iw*strideW - padLeft + kw*dilW
+									if ow < 0 || ow >= OW {
+										continue
+									}
+									ci := (oc*KH+kh)*KW + kw
+									of[oOff+(oc*OH+oh)*OW+ow] += col[ci*HW+colIdx]
+								}
 							}
 						}
 					}
 				}
 			}
+			goto addBias
 		}
-		goto addBias
-	}
 	} // end useConvTrGEMM
 
 	// Generic fallback: 7-nested loop

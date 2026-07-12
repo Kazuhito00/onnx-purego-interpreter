@@ -25,7 +25,7 @@ A pure Go ONNX inference package — no cgo, no assembly, no native dependencies
 - **Pure Go** — Cross-compile across any `GOOS`/`GOARCH`
 - **Minimal dependencies** — Only `google.golang.org/protobuf`
 - **Broad operator coverage** — ~80% of ~200 ONNX standard operators implemented (as of 2026/03/25)
-- **Graph optimizations** — 11 passes including Conv+BN fusion, GELU fusion, dead node elimination
+- **Graph optimizations** — 13 passes including Conv+BN fusion, Pad+Conv fusion, affine epilogue fusion, and dead node elimination
 
 ## Installation
 
@@ -200,7 +200,7 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | `UseDepthwiseKernel` | true | Depthwise 3×3 specialized kernel |
 | `Use1x1FastPath` | true | Skip im2col for 1×1 Conv |
 | `UseConvTransposeGEMM` | true | GEMM-based ConvTranspose |
-| `UsePoolFastPath` | true | MaxPool 2×2s2 / 3×3s2 specialization |
+| `UsePoolFastPath` | true | MaxPool 2×2s1/s2 / 3×3s2 specialization |
 | `UseFastErf` | true | Polynomial erf approximation for FastGELU |
 | `UseParallelConv` | true | Goroutine parallelism for large Conv |
 | `MaxThreads` | 0 | Max goroutine count (0 = `runtime.GOMAXPROCS`) |

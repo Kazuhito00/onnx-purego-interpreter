@@ -81,7 +81,10 @@ func f32Bytes(data []float32) []byte {
 	buf := make([]byte, len(data)*4)
 	for i, v := range data {
 		bits := math.Float32bits(v)
-		buf[i*4] = byte(bits); buf[i*4+1] = byte(bits >> 8); buf[i*4+2] = byte(bits >> 16); buf[i*4+3] = byte(bits >> 24)
+		buf[i*4] = byte(bits)
+		buf[i*4+1] = byte(bits >> 8)
+		buf[i*4+2] = byte(bits >> 16)
+		buf[i*4+3] = byte(bits >> 24)
 	}
 	return buf
 }
@@ -90,7 +93,9 @@ func i64Bytes(data []int64) []byte {
 	buf := make([]byte, len(data)*8)
 	for i, v := range data {
 		u := uint64(v)
-		for j := 0; j < 8; j++ { buf[i*8+j] = byte(u >> (j * 8)) }
+		for j := 0; j < 8; j++ {
+			buf[i*8+j] = byte(u >> (j * 8))
+		}
 	}
 	return buf
 }
@@ -587,6 +592,109 @@ func eliminateDeadNodes(g *ir.Graph) {
 	}
 }
 
+// fuseConvAffine merges a scalar affine epilogue into FusedConv. The affine is
+// applied after activation, preserving Conv -> activation -> scale/add order.
+func fuseConvAffine(g *ir.Graph) {
+	producer := make(map[string]*ir.Node)
+	useCount := make(map[string]int)
+	for _, n := range g.Nodes {
+		for _, out := range n.Outputs {
+			producer[out] = n
+		}
+		for _, in := range n.Inputs {
+			if in != "" {
+				useCount[in]++
+			}
+		}
+	}
+	var toRemove []*ir.Node
+	for _, affine := range g.Nodes {
+		if affine.OpType != "FusedAffine" || len(affine.Inputs) != 3 || len(affine.Outputs) == 0 {
+			continue
+		}
+		convOut := affine.Inputs[0]
+		conv := producer[convOut]
+		if conv == nil || conv.OpType != "FusedConv" || useCount[convOut] != 1 {
+			continue
+		}
+		scaleInit, biasInit := g.Initializers[affine.Inputs[1]], g.Initializers[affine.Inputs[2]]
+		if scaleInit == nil || biasInit == nil {
+			continue
+		}
+		scale, errScale := materialize.Float32(scaleInit)
+		bias, errBias := materialize.Float32(biasInit)
+		if errScale != nil || errBias != nil || len(scale) != 1 || len(bias) != 1 {
+			continue
+		}
+		conv.Attrs["post_scale"] = ir.AttrFloat{Value: scale[0]}
+		conv.Attrs["post_bias"] = ir.AttrFloat{Value: bias[0]}
+		conv.Outputs[0] = affine.Outputs[0]
+		toRemove = append(toRemove, affine)
+	}
+	removeNodes(g, toRemove)
+}
+
+// fusePadConv absorbs a static, zero-valued NCHW Pad into its sole Conv
+// consumer. Shared, negative, non-spatial, or dynamic pads remain unchanged.
+func fusePadConv(g *ir.Graph) {
+	useCount := make(map[string]int)
+	for _, n := range g.Nodes {
+		for _, in := range n.Inputs {
+			if in != "" {
+				useCount[in]++
+			}
+		}
+	}
+	var toRemove []*ir.Node
+	for _, pad := range g.Nodes {
+		if pad.OpType != "Pad" || len(pad.Inputs) < 2 || len(pad.Outputs) == 0 || pad.GetAttrString("mode", "constant") != "constant" {
+			continue
+		}
+		out := pad.Outputs[0]
+		if useCount[out] != 1 {
+			continue
+		}
+		var conv *ir.Node
+		for _, n := range g.Nodes {
+			if len(n.Inputs) > 0 && n.Inputs[0] == out && (n.OpType == "Conv" || n.OpType == "FusedConv") {
+				conv = n
+				break
+			}
+		}
+		if conv == nil || conv.GetAttrString("auto_pad", "NOTSET") != "NOTSET" {
+			continue
+		}
+		padsInit := g.Initializers[pad.Inputs[1]]
+		if padsInit == nil {
+			continue
+		}
+		pads, err := materialize.Int64(padsInit)
+		if err != nil || len(pads) != 8 || pads[0] != 0 || pads[1] != 0 || pads[4] != 0 || pads[5] != 0 {
+			continue
+		}
+		if pads[2] < 0 || pads[3] < 0 || pads[6] < 0 || pads[7] < 0 {
+			continue
+		}
+		if len(pad.Inputs) > 2 && pad.Inputs[2] != "" {
+			valueInit := g.Initializers[pad.Inputs[2]]
+			if valueInit == nil {
+				continue
+			}
+			value, err := materialize.Float32(valueInit)
+			if err != nil || len(value) != 1 || value[0] != 0 {
+				continue
+			}
+		}
+		existing := conv.GetAttrInts("pads", []int64{0, 0, 0, 0})
+		if len(existing) != 4 {
+			continue
+		}
+		conv.Attrs["pads"] = ir.AttrInts{Value: []int64{existing[0] + pads[2], existing[1] + pads[3], existing[2] + pads[6], existing[3] + pads[7]}}
+		conv.Inputs[0] = pad.Inputs[0]
+		toRemove = append(toRemove, pad)
+	}
+	removeNodes(g, toRemove)
+}
 func removeNodes(g *ir.Graph, nodes []*ir.Node) {
 	if len(nodes) == 0 {
 		return
