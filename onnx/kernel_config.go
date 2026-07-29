@@ -8,12 +8,14 @@ import "github.com/Kazuhito00/onnx-purego-interpreter/internal/ops"
 // DefaultKernelConfig で作成した場合、全フィールドが true (全最適化有効)。
 type KernelConfig struct {
 	UseTiledGEMM         bool // microKernel4x8 tiled GEMM (vs simple ikj loop)
-	UseDepthwiseKernel   bool // depthwise 3x3 specialized kernel
+	UseDepthwiseKernel   bool // depthwise direct kernel (3x3 specialized + generic KxK)
 	Use1x1FastPath       bool // 1x1 Conv direct GEMM (skip im2col)
 	UseConvTransposeGEMM bool // GEMM-based ConvTranspose (vs naive 7-nested loop)
 	UsePoolFastPath      bool // MaxPool 2x2s1/s2 / 3x3s2 specialization
 	UseFastErf           bool // polynomial erf approximation in FastGELU
 	UseParallelConv      bool // goroutine parallelism for large Conv
+	UseParallelOps       bool // goroutine parallelism for non-Conv ops (pool/matmul/activation/resize/reduce)
+	UseReduceFastPath    bool // ReduceMean trailing-axes fast path (GAP/LN shapes)
 	MaxThreads           int  // max goroutines for parallel ops (0 = runtime.GOMAXPROCS)
 }
 
@@ -28,6 +30,8 @@ func DefaultKernelConfig() *KernelConfig {
 		UsePoolFastPath:      true,
 		UseFastErf:           true,
 		UseParallelConv:      true,
+		UseParallelOps:       true,
+		UseReduceFastPath:    true,
 		MaxThreads:           0,
 	}
 }
@@ -45,6 +49,8 @@ func (kc *KernelConfig) toInternal() *ops.KernelConfig {
 		UsePoolFastPath:      kc.UsePoolFastPath,
 		UseFastErf:           kc.UseFastErf,
 		UseParallelConv:      kc.UseParallelConv,
+		UseParallelOps:       kc.UseParallelOps,
+		UseReduceFastPath:    kc.UseReduceFastPath,
 		MaxThreads:           kc.MaxThreads,
 	}
 }

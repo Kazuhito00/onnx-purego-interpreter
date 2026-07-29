@@ -112,6 +112,8 @@ func TestKernelConfigIndividual(t *testing.T) {
 		{"UsePoolFastPath=false", func(kc *KernelConfig) { kc.UsePoolFastPath = false }},
 		{"UseFastErf=false", func(kc *KernelConfig) { kc.UseFastErf = false }},
 		{"UseParallelConv=false", func(kc *KernelConfig) { kc.UseParallelConv = false }},
+		{"UseParallelOps=false", func(kc *KernelConfig) { kc.UseParallelOps = false }},
+		{"UseReduceFastPath=false", func(kc *KernelConfig) { kc.UseReduceFastPath = false }},
 	}
 
 	for _, f := range flags {

@@ -11,12 +11,14 @@ import (
 // All fields default to true (all optimizations enabled).
 type KernelConfig struct {
 	UseTiledGEMM         bool // microKernel4x8 tiled GEMM (vs simple ikj loop)
-	UseDepthwiseKernel   bool // depthwise 3x3 specialized kernel
+	UseDepthwiseKernel   bool // depthwise direct kernel (3x3 specialized + generic KxK)
 	Use1x1FastPath       bool // 1x1 Conv direct GEMM (skip im2col)
 	UseConvTransposeGEMM bool // GEMM-based ConvTranspose (vs naive 7-nested loop)
 	UsePoolFastPath      bool // MaxPool 2x2s1/s2 / 3x3s2 specialization
 	UseFastErf           bool // polynomial erf approximation in FastGELU
 	UseParallelConv      bool // goroutine parallelism for large Conv
+	UseParallelOps       bool // goroutine parallelism for non-Conv ops (pool/matmul/activation/resize/reduce)
+	UseReduceFastPath    bool // ReduceMean trailing-axes fast path (GAP/LN shapes)
 	MaxThreads           int  // max goroutines for parallel ops (0 = runtime.GOMAXPROCS)
 }
 
@@ -30,8 +32,24 @@ func DefaultKernelConfig() *KernelConfig {
 		UsePoolFastPath:      true,
 		UseFastErf:           true,
 		UseParallelConv:      true,
+		UseParallelOps:       true,
+		UseReduceFastPath:    true,
 		MaxThreads:           0, // 0 = use runtime.GOMAXPROCS
 	}
+}
+
+// ParallelOpsWorkers は Conv 以外の演算の並列度を返す(無効時は 1)。
+// nil レシーバはデフォルト設定(有効)として扱う。
+func (kc *KernelConfig) ParallelOpsWorkers() int {
+	if kc != nil && !kc.UseParallelOps {
+		return 1
+	}
+	return kc.Workers()
+}
+
+// ReduceFastPathEnabled は ReduceMean 末尾軸 fast path の有効判定。
+func (kc *KernelConfig) ReduceFastPathEnabled() bool {
+	return kc == nil || kc.UseReduceFastPath
 }
 
 // Workers returns the effective number of worker goroutines.

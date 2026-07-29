@@ -42,7 +42,7 @@ func opFastGELUWithConfig(node *ir.Node, inputs []tensor.Tensor, kc *KernelConfi
 		src := t.Data()
 		workers := 1
 		if len(src) >= elementwiseParallelMin {
-			workers = kc.Workers()
+			workers = kc.ParallelOpsWorkers()
 		}
 		if useFastErf {
 			const invSqrt2 = float32(0.7071067811865476)

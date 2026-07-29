@@ -117,7 +117,7 @@ func opMatMulWithConfig(node *ir.Node, inputs []tensor.Tensor, kc *KernelConfig)
 			N := pb.N
 			outData := make([]float32, M*N)
 			gemmF32PackedParallel(at.Data(), &PackedB{Data: pb.Packed, K: pb.K, N: pb.N},
-				outData, M, activeMatMulConfig.Workers())
+				outData, M, activeMatMulConfig.ParallelOpsWorkers())
 			outShape := make(tensor.Shape, as.NDim())
 			copy(outShape, as[:as.NDim()-1])
 			outShape[as.NDim()-1] = N
@@ -288,7 +288,7 @@ func doMatMul[T tensor.Numeric](a, b *tensor.Dense[T]) (*tensor.Dense[T], error)
 		// Parallelize across batches for large workloads
 		workPerBatch := M * N * K
 		if batchSize >= 4 && workPerBatch >= 1024 {
-			nWorkers := activeMatMulConfig.Workers()
+			nWorkers := activeMatMulConfig.ParallelOpsWorkers()
 			if nWorkers > batchSize {
 				nWorkers = batchSize
 			}
@@ -313,9 +313,9 @@ func doMatMul[T tensor.Numeric](a, b *tensor.Dense[T]) (*tensor.Dense[T], error)
 				}(start, end)
 			}
 			wg.Wait()
-		} else if workPerBatch >= 500_000 && M >= 8 && activeMatMulConfig.Workers() > 1 {
+		} else if workPerBatch >= 500_000 && M >= 8 && activeMatMulConfig.ParallelOpsWorkers() > 1 {
 			// バッチ数が少なく 1 バッチが大きい場合は M(行)方向に並列化する
-			nWorkers := min(activeMatMulConfig.Workers(), (M+3)/4)
+			nWorkers := min(activeMatMulConfig.ParallelOpsWorkers(), (M+3)/4)
 			chunk := ((M+nWorkers-1)/nWorkers + 3) &^ 3
 			for batch := 0; batch < batchSize; batch++ {
 				o := offsets[batch]

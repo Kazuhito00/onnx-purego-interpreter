@@ -23,7 +23,7 @@ func actWorkers(n int) int {
 	if n < elementwiseParallelMin {
 		return 1
 	}
-	return activeActConfig.Workers()
+	return activeActConfig.ParallelOpsWorkers()
 }
 
 // actWorkersCheap は Relu/クランプ系など帯域律速の軽量 elementwise 用。
@@ -32,7 +32,7 @@ func actWorkersCheap(n int) int {
 	if n < cheapParallelMin {
 		return 1
 	}
-	return activeActConfig.Workers()
+	return activeActConfig.ParallelOpsWorkers()
 }
 
 func opRelu(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error) {

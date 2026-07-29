@@ -274,7 +274,7 @@ func resizeLinearNCHW[T tensor.Numeric](t *tensor.Dense[T], outShape tensor.Shap
 
 	workers := 1
 	if N*C*outH*outW >= elementwiseParallelMin {
-		workers = activeActConfig.Workers()
+		workers = activeActConfig.ParallelOpsWorkers()
 	}
 	forEachIndexParallel(N*C, workers, func(nc int) {
 		baseIn := nc * inH * inW

@@ -210,9 +210,11 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | `UsePoolFastPath` | true | MaxPool 2×2s1/s2 / 3×3s2 特化 |
 | `UseFastErf` | true | FastGELU 用の多項式近似 erf |
 | `UseParallelConv` | true | 大きな Conv の goroutine 並列化（ストリップ単位の動的分配） |
+| `UseParallelOps` | true | Conv 以外（MaxPool / MatMul / 活性化 / Resize / ReduceMean）の goroutine 並列化 |
+| `UseReduceFastPath` | true | ReduceMean の末尾連続軸 fast path（GAP / LayerNorm 形状） |
 | `MaxThreads` | 0 | 最大 goroutine 並列数 (0 = `runtime.GOMAXPROCS`) |
 
-大きな MaxPool / MatMul も入力サイズに応じて自動的に並列化されます（並列度は `MaxThreads` に従います）。
+大きな MaxPool / MatMul / 活性化などの並列化は `UseParallelOps`、並列度は `MaxThreads` で制御できます。
 
 ## Profiling
 

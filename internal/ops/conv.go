@@ -66,7 +66,7 @@ func opFusedConv(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error)
 	// minLen は演算の重さに応じた並列化閾値(軽量なクランプ系は大きめ)。
 	epilogueF32With := func(minLen int, data []float32, fn func(v float32) float32) {
 		workers := 1
-		if len(data) >= minLen {
+		if len(data) >= minLen && (activeConvConfig == nil || activeConvConfig.UseParallelConv) {
 			workers = activeConvConfig.Workers()
 		}
 		forEachRangeParallel(len(data), workers, func(lo, hi int) {
@@ -856,35 +856,67 @@ func im2col[T tensor.Numeric](
 	}
 
 	// General path with padding/dilation
+	// kw ごとに水平方向の有効範囲 [owLo, owHi) を事前計算し、
+	// 内側は境界チェックなし(stride 1 なら行 copy)で書き出す
+	owLos := make([]int, KW)
+	owHis := make([]int, KW)
+	for kw := 0; kw < KW; kw++ {
+		off := kw*dilW - padLeft // iw = ow*strideW + off
+		lo := 0
+		if off < 0 {
+			lo = (-off + strideW - 1) / strideW
+		}
+		hi := 0
+		if off <= W-1 {
+			hi = min(OW, (W-1-off)/strideW+1)
+		}
+		if hi < lo {
+			hi = lo
+		}
+		owLos[kw], owHis[kw] = lo, hi
+	}
+
 	colIdx := 0
 	for ic := 0; ic < icPerGroup; ic++ {
 		absIC := g*icPerGroup + ic
 		xBase := n*C*HW + absIC*HW
 		for kh := 0; kh < KH; kh++ {
 			for kw := 0; kw < KW; kw++ {
+				off := kw*dilW - padLeft
+				owLo, owHi := owLos[kw], owHis[kw]
 				for oh := ohFrom; oh < ohTo; oh++ {
 					ih := oh*strideH - padTop + kh*dilH
 					if ih < 0 || ih >= H {
-						for ow := 0; ow < OW; ow++ {
-							col[colIdx] = 0
-							colIdx++
-						}
+						zeroFill(col[colIdx : colIdx+OW])
+						colIdx += OW
 						continue
 					}
 					rowBase := xBase + ih*W
-					for ow := 0; ow < OW; ow++ {
-						iw := ow*strideW - padLeft + kw*dilW
-						if iw >= 0 && iw < W {
-							col[colIdx] = xData[rowBase+iw]
-						} else {
-							col[colIdx] = 0
+					zeroFill(col[colIdx : colIdx+owLo])
+					colIdx += owLo
+					if strideW == 1 {
+						src := rowBase + owLo + off
+						copy(col[colIdx:colIdx+owHi-owLo], xData[src:src+owHi-owLo])
+						colIdx += owHi - owLo
+					} else {
+						src := rowBase + owLo*strideW + off
+						for ow := owLo; ow < owHi; ow++ {
+							col[colIdx] = xData[src]
+							colIdx++
+							src += strideW
 						}
-						colIdx++
 					}
+					zeroFill(col[colIdx : colIdx+OW-owHi])
+					colIdx += OW - owHi
 				}
 			}
 		}
 	}
+}
+
+// zeroFill は s を 0 クリアする(scratch バッファは前回の値が残っているため必須)。
+func zeroFill[T tensor.Numeric](s []T) {
+	clear(s)
 }
 
 // gemmNN computes C += A * B where A is [M,K], B is [K,N], C is [M,N].

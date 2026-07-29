@@ -66,11 +66,7 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 	// (n,c) 平面ごとに独立なため、大きな入力ではチャネル単位で並列化する
 	poolWorkers := 1
 	if OH*OW*KH*KW*N*C > 200_000 && N*C >= 2 {
-		cfg := activePoolConfig
-		if cfg == nil {
-			cfg = DefaultKernelConfig()
-		}
-		poolWorkers = cfg.Workers()
+		poolWorkers = activePoolConfig.ParallelOpsWorkers()
 	}
 
 	// Fast path: 2x2 stride 2, no padding

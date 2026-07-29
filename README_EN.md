@@ -210,9 +210,11 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | `UsePoolFastPath` | true | MaxPool 2×2s1/s2 / 3×3s2 specialization |
 | `UseFastErf` | true | Polynomial erf approximation for FastGELU |
 | `UseParallelConv` | true | Goroutine parallelism for large Conv (dynamically scheduled strips) |
+| `UseParallelOps` | true | Goroutine parallelism for non-Conv ops (MaxPool / MatMul / activations / Resize / ReduceMean) |
+| `UseReduceFastPath` | true | ReduceMean trailing-axes fast path (GAP / LayerNorm shapes) |
 | `MaxThreads` | 0 | Max goroutine count (0 = `runtime.GOMAXPROCS`) |
 
-Large MaxPool / MatMul operations are also parallelized automatically based on input size (parallelism follows `MaxThreads`).
+Parallelism for large MaxPool / MatMul / activation ops is controlled by `UseParallelOps`, and the degree of parallelism by `MaxThreads`.
 
 ## Profiling
 

@@ -474,7 +474,7 @@ func reduceMeanDenseFloat32(x *tensor.Dense[float32], axes []int, keepDims bool)
 	// Fast path: 縮約軸が末尾の連続ブロック(GAP 相当の [2,3] や LN 相当の [-1] 等)なら、
 	// 入力は outer×inner の連続ブロックに分かれるためタイトループ+並列で縮約できる。
 	// 累積順序は汎用パス(先頭から順に加算)と同一なので結果はビット一致する。
-	if ndim := shape.NDim(); len(axesSet) > 0 && x.Len() > 0 {
+	if ndim := shape.NDim(); activeActConfig.ReduceFastPathEnabled() && len(axesSet) > 0 && x.Len() > 0 {
 		minAxis := ndim - len(axesSet)
 		trailing := minAxis >= 0
 		for d := minAxis; d < ndim && trailing; d++ {
@@ -493,7 +493,7 @@ func reduceMeanDenseFloat32(x *tensor.Dense[float32], axes []int, keepDims bool)
 			data := make([]float32, outer)
 			workers := 1
 			if x.Len() >= elementwiseParallelMin && outer > 1 {
-				workers = activeActConfig.Workers()
+				workers = activeActConfig.ParallelOpsWorkers()
 			}
 			forEachIndexParallel(outer, workers, func(o int) {
 				sum := 0.0
