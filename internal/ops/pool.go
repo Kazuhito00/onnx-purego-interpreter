@@ -199,6 +199,39 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 	return tensor.NewDense[T](outShape, outData), nil
 }
 
+// elementwiseParallelMin は exp/erf 等の重い elementwise 演算を並列化する最小要素数。
+// これ未満では goroutine 起動コストが上回る。
+const elementwiseParallelMin = 64 * 1024
+
+// cheapParallelMin は Relu などの帯域律速な軽量 elementwise 用の閾値。
+// 計算が軽い演算は並列化の益が小さく、キャッシュ局所性も失うため大きめに取る。
+const cheapParallelMin = 2 * 1024 * 1024
+
+// forEachRangeParallel は [0, n) を連続チャンクに分割して fn(lo, hi) を並列実行する。
+// fn は互いに素な範囲のみに書き込むこと。
+func forEachRangeParallel(n, workers int, fn func(lo, hi int)) {
+	if workers <= 1 || n <= 0 {
+		fn(0, n)
+		return
+	}
+	nWorkers := min(workers, (n+1023)/1024)
+	chunk := (n + nWorkers - 1) / nWorkers
+	var wg sync.WaitGroup
+	for w := 0; w < nWorkers; w++ {
+		lo := w * chunk
+		if lo >= n {
+			break
+		}
+		hi := min(lo+chunk, n)
+		wg.Add(1)
+		go func(lo, hi int) {
+			defer wg.Done()
+			fn(lo, hi)
+		}(lo, hi)
+	}
+	wg.Wait()
+}
+
 // forEachIndexParallel は fn(0..count-1) を最大 workers 並列で実行する。
 // 動的分配のため P/E コア混在でも負荷が偏らない。fn は互いに独立であること。
 func forEachIndexParallel(count, workers int, fn func(idx int)) {

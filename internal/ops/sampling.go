@@ -250,37 +250,52 @@ func resizeLinearNCHW[T tensor.Numeric](t *tensor.Dense[T], outShape tensor.Shap
 	src := t.Data()
 	out := make([]T, outShape.Size())
 
-	for n := 0; n < N; n++ {
-		for c := 0; c < C; c++ {
-			baseIn := (n*C + c) * inH * inW
-			baseOut := (n*C + c) * outH * outW
-			for oh := 0; oh < outH; oh++ {
-				iy := resizeInputCoord(oh, inH, outH, coordMode)
-				y0 := int(math.Floor(iy))
-				y1 := y0 + 1
-				ly := iy - float64(y0)
-				hy := 1.0 - ly
-				y0 = clampIndex(y0, inH)
-				y1 = clampIndex(y1, inH)
-				for ow := 0; ow < outW; ow++ {
-					ix := resizeInputCoord(ow, inW, outW, coordMode)
-					x0 := int(math.Floor(ix))
-					x1 := x0 + 1
-					lx := ix - float64(x0)
-					hx := 1.0 - lx
-					x0 = clampIndex(x0, inW)
-					x1 = clampIndex(x1, inW)
+	// 補間係数は行・列それぞれ独立なので事前計算する(ピクセルごとの再計算を排除)
+	x0s := make([]int, outW)
+	x1s := make([]int, outW)
+	lxs := make([]float64, outW)
+	for ow := 0; ow < outW; ow++ {
+		ix := resizeInputCoord(ow, inW, outW, coordMode)
+		x0 := int(math.Floor(ix))
+		lxs[ow] = ix - float64(x0)
+		x0s[ow] = clampIndex(x0, inW)
+		x1s[ow] = clampIndex(x0+1, inW)
+	}
+	y0s := make([]int, outH)
+	y1s := make([]int, outH)
+	lys := make([]float64, outH)
+	for oh := 0; oh < outH; oh++ {
+		iy := resizeInputCoord(oh, inH, outH, coordMode)
+		y0 := int(math.Floor(iy))
+		lys[oh] = iy - float64(y0)
+		y0s[oh] = clampIndex(y0, inH)
+		y1s[oh] = clampIndex(y0+1, inH)
+	}
 
-					v00 := float64(src[baseIn+y0*inW+x0])
-					v01 := float64(src[baseIn+y0*inW+x1])
-					v10 := float64(src[baseIn+y1*inW+x0])
-					v11 := float64(src[baseIn+y1*inW+x1])
-					v := v00*hy*hx + v01*hy*lx + v10*ly*hx + v11*ly*lx
-					out[baseOut+oh*outW+ow] = T(v)
-				}
+	workers := 1
+	if N*C*outH*outW >= elementwiseParallelMin {
+		workers = activeActConfig.Workers()
+	}
+	forEachIndexParallel(N*C, workers, func(nc int) {
+		baseIn := nc * inH * inW
+		baseOut := nc * outH * outW
+		for oh := 0; oh < outH; oh++ {
+			ly := lys[oh]
+			hy := 1.0 - ly
+			row0 := baseIn + y0s[oh]*inW
+			row1 := baseIn + y1s[oh]*inW
+			outRow := baseOut + oh*outW
+			for ow := 0; ow < outW; ow++ {
+				lx := lxs[ow]
+				hx := 1.0 - lx
+				v00 := float64(src[row0+x0s[ow]])
+				v01 := float64(src[row0+x1s[ow]])
+				v10 := float64(src[row1+x0s[ow]])
+				v11 := float64(src[row1+x1s[ow]])
+				out[outRow+ow] = T(v00*hy*hx + v01*hy*lx + v10*ly*hx + v11*ly*lx)
 			}
 		}
-	}
+	})
 	return tensor.NewDense[T](outShape, out)
 }
 

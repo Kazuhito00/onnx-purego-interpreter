@@ -21,13 +21,13 @@ func RegisterAll(r *Registry, config ...*KernelConfig) {
 	r.Register("Gemm", opGemm)
 
 	// Activation ops
-	r.Register("Relu", opRelu)
+	r.Register("Relu", makeActivation(opRelu, kc))
 	r.Register("LeakyRelu", opLeakyRelu)
 	r.Register("PRelu", opPRelu)
 	r.Register("Elu", opElu)
-	r.Register("Sigmoid", opSigmoid)
-	r.Register("HardSigmoid", opHardSigmoid)
-	r.Register("HardSwish", opHardSwish)
+	r.Register("Sigmoid", makeActivation(opSigmoid, kc))
+	r.Register("HardSigmoid", makeActivation(opHardSigmoid, kc))
+	r.Register("HardSwish", makeActivation(opHardSwish, kc))
 	r.Register("Tanh", opTanh)
 	r.Register("Softmax", opSoftmax)
 
@@ -61,7 +61,7 @@ func RegisterAll(r *Registry, config ...*KernelConfig) {
 	r.Register("Dropout", opDropout)
 	r.Register("Clip", opClip)
 	r.Register("Shape", opShape)
-	r.Register("ReduceMean", opReduceMean)
+	r.Register("ReduceMean", makeActivation(opReduceMean, kc))
 	r.Register("CumSum", opCumSum)
 	r.Register("Split", opSplit)
 
@@ -106,7 +106,7 @@ func RegisterAll(r *Registry, config ...*KernelConfig) {
 	r.Register("ScatterND", opScatterND)
 	r.Register("NonMaxSuppression", opNonMaxSuppression)
 	r.Register("ArgMax", opArgMax)
-	r.Register("Resize", opResize)
+	r.Register("Resize", makeActivation(opResize, kc))
 	r.Register("Upsample", opUpsample)
 	r.Register("GridSample", opGridSample)
 	r.Register("LayerNormalization", opLayerNormalization)

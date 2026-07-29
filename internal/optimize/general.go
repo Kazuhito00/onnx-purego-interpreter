@@ -2,6 +2,7 @@ package optimize
 
 import (
 	"fmt"
+	"math"
 
 	"github.com/Kazuhito00/onnx-purego-interpreter/internal/ir"
 	"github.com/Kazuhito00/onnx-purego-interpreter/internal/materialize"
@@ -23,10 +24,18 @@ var foldableOps = map[string]bool{
 func foldConstants(g *ir.Graph) {
 	reg := ops.NewRegistry()
 	ops.RegisterAll(reg)
+	isGraphOutput := make(map[string]bool)
+	for _, o := range g.Outputs {
+		isGraphOutput[o.Name] = true
+	}
 	for {
 		changed := false
 		for i, n := range g.Nodes {
 			if n.Domain != "" || !foldableOps[n.OpType] || len(n.Outputs) != 1 {
+				continue
+			}
+			// グラフ出力を初期化子化するとノードなしで出力を返す形になるため見送る
+			if isGraphOutput[n.Outputs[0]] {
 				continue
 			}
 			inputs := make([]tensor.Tensor, len(n.Inputs))
@@ -109,8 +118,45 @@ func tensorInitializer(name string, t tensor.Tensor) (*ir.Initializer, error) {
 	return init, nil
 }
 
+// fuseHardSwish は Mul(x, HardSigmoid(x)) を HardSwish に融合する。
+// HardSwish カーネルは x*clip(x+3,0,6)/6 (= alpha=1/6, beta=0.5) 固定のため、
+// HardSigmoid の係数が一致する場合に限る。
+func fuseHardSwish(g *ir.Graph) {
+	producer, uses := producerMap(g), valueUseCounts(g)
+	var dead []*ir.Node
+	for _, mul := range g.Nodes {
+		if mul.OpType != "Mul" || len(mul.Inputs) != 2 {
+			continue
+		}
+		for swap := 0; swap < 2; swap++ {
+			x, hsName := mul.Inputs[swap], mul.Inputs[1-swap]
+			hs := producer[hsName]
+			if hs == nil || hs.OpType != "HardSigmoid" || uses[hsName] != 1 || hs.Inputs[0] != x {
+				continue
+			}
+			alpha := float64(hs.GetAttrFloat("alpha", 0.2))
+			beta := hs.GetAttrFloat("beta", 0.5)
+			if math.Abs(alpha-1.0/6.0) > 1e-6 || beta != 0.5 {
+				continue
+			}
+			mul.OpType = "HardSwish"
+			mul.Inputs = []string{x}
+			mul.Attrs = map[string]ir.AttrValue{}
+			dead = append(dead, hs)
+			break
+		}
+	}
+	removeNodes(g, dead)
+}
+
 // simplifyTransposes removes identity transposes and composes adjacent ones.
+// グラフ出力を生成するノードの除去は出力名が変わってしまうため行わない
+// (出力を名前で参照する利用側を壊さないため)。
 func simplifyTransposes(g *ir.Graph) {
+	isGraphOutput := make(map[string]bool)
+	for _, o := range g.Outputs {
+		isGraphOutput[o.Name] = true
+	}
 	for {
 		producer := producerMap(g)
 		uses := valueUseCounts(g)
@@ -121,6 +167,9 @@ func simplifyTransposes(g *ir.Graph) {
 			}
 			perm := n.GetAttrInts("perm", nil)
 			if isIdentityPerm(perm) {
+				if isGraphOutput[n.Outputs[0]] {
+					continue
+				}
 				replaceValue(g, n.Outputs[0], n.Inputs[0])
 				removeNodes(g, []*ir.Node{n})
 				changed = true
@@ -147,10 +196,11 @@ func simplifyTransposes(g *ir.Graph) {
 				continue
 			}
 			n.Inputs[0] = prev.Inputs[0]
-			if isIdentityPerm(composed) {
+			if isIdentityPerm(composed) && !isGraphOutput[n.Outputs[0]] {
 				replaceValue(g, n.Outputs[0], n.Inputs[0])
 				removeNodes(g, []*ir.Node{prev, n})
 			} else {
+				// n がグラフ出力の場合も perm 合成(恒等含む)までは安全に行える
 				n.Attrs["perm"] = ir.AttrInts{Value: composed}
 				removeNodes(g, []*ir.Node{prev})
 			}

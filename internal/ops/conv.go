@@ -61,17 +61,39 @@ func opFusedConv(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error)
 	activation := node.GetAttrString("activation", "none")
 	postScale := node.GetAttrFloat("post_scale", 1)
 	postBias := node.GetAttrFloat("post_bias", 0)
+
+	// float32 の epilogue は要素独立なので大きなテンソルでは並列化する。
+	// minLen は演算の重さに応じた並列化閾値(軽量なクランプ系は大きめ)。
+	epilogueF32With := func(minLen int, data []float32, fn func(v float32) float32) {
+		workers := 1
+		if len(data) >= minLen {
+			workers = activeConvConfig.Workers()
+		}
+		forEachRangeParallel(len(data), workers, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				data[i] = fn(data[i])
+			}
+		})
+	}
+	// 軽量(クランプ・積和)系: 帯域律速のため大きなテンソルのみ並列化
+	epilogueF32 := func(data []float32, fn func(v float32) float32) {
+		epilogueF32With(cheapParallelMin, data, fn)
+	}
+	// 重量(exp 等)系: 計算律速のため小さめの閾値で並列化
+	epilogueF32Heavy := func(data []float32, fn func(v float32) float32) {
+		epilogueF32With(elementwiseParallelMin, data, fn)
+	}
+
 	switch activation {
 	case "relu":
-		out := results[0]
-		switch t := out.(type) {
+		switch t := results[0].(type) {
 		case *tensor.Dense[float32]:
-			data := t.Data()
-			for i, v := range data {
+			epilogueF32(t.Data(), func(v float32) float32 {
 				if v < 0 {
-					data[i] = 0
+					return 0
 				}
-			}
+				return v
+			})
 		case *tensor.Dense[float64]:
 			data := t.Data()
 			for i, v := range data {
@@ -85,39 +107,53 @@ func opFusedConv(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error)
 		clipMax := node.GetAttrFloat("clip_max", 6) // ReLU6 default
 		switch t := results[0].(type) {
 		case *tensor.Dense[float32]:
-			data := t.Data()
-			for i, v := range data {
+			epilogueF32(t.Data(), func(v float32) float32 {
 				if v < clipMin {
-					data[i] = clipMin
-				} else if v > clipMax {
-					data[i] = clipMax
+					return clipMin
 				}
-			}
+				if v > clipMax {
+					return clipMax
+				}
+				return v
+			})
 		}
 	case "silu":
 		// SiLU (Swish): x * sigmoid(x) = x / (1 + exp(-x))
 		switch t := results[0].(type) {
 		case *tensor.Dense[float32]:
-			data := t.Data()
-			for i, v := range data {
-				data[i] = v * float32(1.0/(1.0+math.Exp(-float64(v))))
-			}
+			epilogueF32Heavy(t.Data(), func(v float32) float32 {
+				return v * float32(1.0/(1.0+math.Exp(-float64(v))))
+			})
 		case *tensor.Dense[float64]:
 			data := t.Data()
 			for i, v := range data {
 				data[i] = v / (1.0 + math.Exp(-v))
 			}
 		}
+	case "hardswish":
+		// HardSwish: x * clip(x+3, 0, 6) / 6
+		switch t := results[0].(type) {
+		case *tensor.Dense[float32]:
+			epilogueF32(t.Data(), func(v float32) float32 {
+				hsig := float32(math.Min(math.Max(float64(v+3), 0), 6) / 6.0)
+				return v * hsig
+			})
+		case *tensor.Dense[float64]:
+			data := t.Data()
+			for i, v := range data {
+				data[i] = v * (math.Min(math.Max(v+3, 0), 6) / 6.0)
+			}
+		}
 	case "leakyrelu":
 		alpha := node.GetAttrFloat("leakyrelu_alpha", 0.01)
 		switch t := results[0].(type) {
 		case *tensor.Dense[float32]:
-			data := t.Data()
-			for i, v := range data {
+			epilogueF32(t.Data(), func(v float32) float32 {
 				if v < 0 {
-					data[i] = v * alpha
+					return v * alpha
 				}
-			}
+				return v
+			})
 		case *tensor.Dense[float64]:
 			data := t.Data()
 			a64 := float64(alpha)
@@ -132,10 +168,9 @@ func opFusedConv(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error)
 	if postScale != 1 || postBias != 0 {
 		switch t := results[0].(type) {
 		case *tensor.Dense[float32]:
-			data := t.Data()
-			for i, v := range data {
-				data[i] = v*postScale + postBias
-			}
+			epilogueF32(t.Data(), func(v float32) float32 {
+				return v*postScale + postBias
+			})
 		case *tensor.Dense[float64]:
 			data := t.Data()
 			s, b := float64(postScale), float64(postBias)
@@ -328,8 +363,16 @@ func conv2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T], node *i
 			if b != nil {
 				bf = any(b.Data()).([]float32)
 			}
+			dwWorkers := 1
+			if N*C*OH*OW*KH*KW > 250_000 && (kc == nil || kc.UseParallelConv) {
+				cfg := kc
+				if cfg == nil {
+					cfg = DefaultKernelConfig()
+				}
+				dwWorkers = cfg.Workers()
+			}
 			out := depthwiseF32(xf, wf, bf, N, C, H, W, KH, KW, OH, OW,
-				strideH, strideW, padTop, padLeft)
+				strideH, strideW, padTop, padLeft, dwWorkers)
 			return any(tensor.NewDense[float32](outShape, out)).(*tensor.Dense[T]), nil
 		}
 	}
@@ -360,8 +403,16 @@ func conv2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T], node *i
 						cfg = DefaultKernelConfig()
 					}
 					// OC(行)が小さいと行分割では worker 数が頭打ちになるため、
-					// 列ストライプ数が行チャンク数を上回る場合は列(HW)方向に分割する
-					if (HW+nc-1)/nc > OC/4 {
+					// 行分割で worker を飽和できず、かつ列ストライプ数の方が多い場合のみ
+					// 列(HW)方向に分割する(行分割で足りる形状は行分割の方が速い)
+					colStripes := (HW + nc - 1) / nc
+					preferCol := OC/4 < cfg.Workers() && colStripes > OC/4
+					// B(入力)がキャッシュを大きく超え A(重み)が L2 に収まる形状では、
+					// 行分割だと worker ごとに B 全体を読み直すため列分割が有利
+					if !preferCol && C*HW*4 > 8<<20 && OC*C*4 <= 2<<20 && colStripes >= cfg.Workers() {
+						preferCol = true
+					}
+					if preferCol {
 						gemmF32ParallelCols(wf, xSlice, oSlice, OC, HW, C, cfg.Workers())
 					} else if OC >= 16 {
 						nWorkers := min(cfg.Workers(), OC)

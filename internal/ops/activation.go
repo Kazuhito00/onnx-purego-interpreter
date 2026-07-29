@@ -8,6 +8,33 @@ import (
 	"github.com/Kazuhito00/onnx-purego-interpreter/tensor"
 )
 
+// activeActConfig は makeActivation で設定される(nil = デフォルト設定)。
+var activeActConfig *KernelConfig
+
+func makeActivation(f OpFunc, kc *KernelConfig) OpFunc {
+	return func(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error) {
+		activeActConfig = kc
+		return f(node, inputs)
+	}
+}
+
+// actWorkers は exp/erf 等の計算が重い elementwise 演算の並列度を返す。
+func actWorkers(n int) int {
+	if n < elementwiseParallelMin {
+		return 1
+	}
+	return activeActConfig.Workers()
+}
+
+// actWorkersCheap は Relu/クランプ系など帯域律速の軽量 elementwise 用。
+// 並列化の益が小さいため、かなり大きなテンソルに限って分割する。
+func actWorkersCheap(n int) int {
+	if n < cheapParallelMin {
+		return 1
+	}
+	return activeActConfig.Workers()
+}
+
 func opRelu(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error) {
 	switch t := inputs[0].(type) {
 	case *tensor.Dense[float32]:
@@ -62,11 +89,13 @@ func reluDense[T tensor.Numeric](t *tensor.Dense[T]) *tensor.Dense[T] {
 	data := make([]T, t.Len())
 	src := t.Data()
 	var zero T
-	for i, v := range src {
-		if v > zero {
-			data[i] = v
+	forEachRangeParallel(len(src), actWorkersCheap(len(src)), func(lo, hi int) {
+		for i := lo; i < hi; i++ {
+			if v := src[i]; v > zero {
+				data[i] = v
+			}
 		}
-	}
+	})
 	return tensor.NewDense[T](t.Shape().Clone(), data)
 }
 
@@ -74,9 +103,12 @@ func opSigmoid(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error) {
 	switch t := inputs[0].(type) {
 	case *tensor.Dense[float32]:
 		data := make([]float32, t.Len())
-		for i, v := range t.Data() {
-			data[i] = float32(1.0 / (1.0 + math.Exp(-float64(v))))
-		}
+		src := t.Data()
+		forEachRangeParallel(len(src), actWorkers(len(src)), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				data[i] = float32(1.0 / (1.0 + math.Exp(-float64(src[i]))))
+			}
+		})
 		return []tensor.Tensor{tensor.NewDense[float32](t.Shape().Clone(), data)}, nil
 	case *tensor.Dense[float64]:
 		data := make([]float64, t.Len())
@@ -95,15 +127,18 @@ func opHardSigmoid(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, erro
 	switch t := inputs[0].(type) {
 	case *tensor.Dense[float32]:
 		data := make([]float32, t.Len())
-		for i, v := range t.Data() {
-			y := alpha*float64(v) + beta
-			if y < 0 {
-				y = 0
-			} else if y > 1 {
-				y = 1
+		src := t.Data()
+		forEachRangeParallel(len(src), actWorkersCheap(len(src)), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				y := alpha*float64(src[i]) + beta
+				if y < 0 {
+					y = 0
+				} else if y > 1 {
+					y = 1
+				}
+				data[i] = float32(y)
 			}
-			data[i] = float32(y)
-		}
+		})
 		return []tensor.Tensor{tensor.NewDense[float32](t.Shape().Clone(), data)}, nil
 	case *tensor.Dense[float64]:
 		data := make([]float64, t.Len())
@@ -126,10 +161,14 @@ func opHardSwish(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error)
 	switch t := inputs[0].(type) {
 	case *tensor.Dense[float32]:
 		data := make([]float32, t.Len())
-		for i, v := range t.Data() {
-			hsig := float32(math.Min(math.Max(float64(v+3), 0), 6) / 6.0)
-			data[i] = v * hsig
-		}
+		src := t.Data()
+		forEachRangeParallel(len(src), actWorkers(len(src)), func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				v := src[i]
+				hsig := float32(math.Min(math.Max(float64(v+3), 0), 6) / 6.0)
+				data[i] = v * hsig
+			}
+		})
 		return []tensor.Tensor{tensor.NewDense[float32](t.Shape().Clone(), data)}, nil
 	case *tensor.Dense[float64]:
 		data := make([]float64, t.Len())

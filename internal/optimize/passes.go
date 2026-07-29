@@ -419,6 +419,8 @@ func fuseConvActivation(g *ir.Graph) {
 			activation = "clip"
 		case "LeakyRelu":
 			activation = "leakyrelu"
+		case "HardSwish":
+			activation = "hardswish"
 		default:
 			continue
 		}

@@ -8,7 +8,7 @@ A pure Go ONNX inference package — no cgo, no assembly, no native dependencies
 
 > [!IMPORTANT]
 > This library is a pure Go implementation without SIMD or native library optimizations.<br>
-> Inference performance is roughly 10–50x slower than ONNX Runtime (varies by model and hardware).<br>
+> Inference performance is roughly 5–30x slower than ONNX Runtime (varies by model and hardware).<br>
 > Additionally, only a limited number of models have been verified, so many models may not work.
 >
 > Primary use cases:
@@ -25,7 +25,7 @@ A pure Go ONNX inference package — no cgo, no assembly, no native dependencies
 - **Pure Go** — Cross-compile across any `GOOS`/`GOARCH`
 - **Minimal dependencies** — Only `google.golang.org/protobuf`
 - **Broad operator coverage** — ~80% of ~200 ONNX standard operators implemented (as of 2026/03/25)
-- **Graph optimizations** — 17 passes including Conv+BN fusion, LayerNorm/RMSNorm fusion, constant folding, and dead node elimination
+- **Graph optimizations** — 18 passes including Conv+BN fusion, LayerNorm/RMSNorm fusion, constant folding, and dead node elimination
 
 ## Installation
 
@@ -175,8 +175,9 @@ All passes are enabled by default. Control via session options for debugging or 
 | `eliminate_identity` | Remove Identity nodes |
 | `fuse_layer_norm` | Fuse decomposed LayerNorm → LayerNormalization |
 | `fuse_rms_norm` | Fuse decomposed RMSNorm → RMSNormalization |
-| `fuse_conv_batchnorm` | Fuse Conv + BatchNorm → Conv |
+| `fuse_hardswish` | Fuse Mul(x, HardSigmoid(x)) → HardSwish |
 | `fuse_conv_add_bias` | Fold Conv + Add(const) → bias |
+| `fuse_conv_batchnorm` | Fuse Conv + BatchNorm → Conv |
 | `fuse_conv_activation` | Fuse Conv + ReLU/Clip/LeakyReLU → FusedConv |
 | `fuse_conv_silu` | Fuse Conv + Sigmoid + Mul → Conv(SiLU) |
 | `fuse_matmul_add_bias` | Fuse MatMul + Add → FusedMatMul |
@@ -203,7 +204,7 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | Field | Default | Description |
 |---|---|---|
 | `UseTiledGEMM` | true | Mc=128/Nc=192/Kc=128 tiled GEMM + microKernel4x8 |
-| `UseDepthwiseKernel` | true | Depthwise 3×3 specialized kernel |
+| `UseDepthwiseKernel` | true | Direct depthwise kernel (3×3 specialized + generic K×K, channel-parallel) |
 | `Use1x1FastPath` | true | Skip im2col for 1×1 Conv |
 | `UseConvTransposeGEMM` | true | GEMM-based ConvTranspose |
 | `UsePoolFastPath` | true | MaxPool 2×2s1/s2 / 3×3s2 specialization |

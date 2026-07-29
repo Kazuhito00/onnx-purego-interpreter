@@ -132,6 +132,44 @@ func TestFuseLayerNormalization(t *testing.T) {
 	}
 }
 
+func hardSwishGraph(alpha float32) (*ir.Graph, *ir.Node) {
+	hs := &ir.Node{OpType: "HardSigmoid", Inputs: []string{"x"}, Outputs: []string{"hs"}, Attrs: map[string]ir.AttrValue{
+		"alpha": ir.AttrFloat{Value: alpha}, "beta": ir.AttrFloat{Value: 0.5}}}
+	mul := &ir.Node{OpType: "Mul", Inputs: []string{"x", "hs"}, Outputs: []string{"y"}, Attrs: map[string]ir.AttrValue{}}
+	g := &ir.Graph{Nodes: []*ir.Node{hs, mul}, Initializers: map[string]*ir.Initializer{}}
+	return g, mul
+}
+
+func TestFuseHardSwish(t *testing.T) {
+	g, mul := hardSwishGraph(1.0 / 6.0)
+	fuseHardSwish(g)
+	if len(g.Nodes) != 1 || mul.OpType != "HardSwish" || mul.Inputs[0] != "x" {
+		t.Fatalf("not fused: %#v", g.Nodes)
+	}
+}
+
+func TestFuseHardSwishRejectsWrongAlpha(t *testing.T) {
+	// ONNX デフォルトの alpha=0.2 は HardSwish (alpha=1/6) と一致しないため融合しない
+	g, mul := hardSwishGraph(0.2)
+	fuseHardSwish(g)
+	if len(g.Nodes) != 2 || mul.OpType != "Mul" {
+		t.Fatalf("must not fuse: %#v", g.Nodes)
+	}
+}
+
+func TestFuseConvHardSwish(t *testing.T) {
+	conv := &ir.Node{OpType: "Conv", Inputs: []string{"x", "w"}, Outputs: []string{"c"}, Attrs: map[string]ir.AttrValue{}}
+	hsw := &ir.Node{OpType: "HardSwish", Inputs: []string{"c"}, Outputs: []string{"y"}, Attrs: map[string]ir.AttrValue{}}
+	g := &ir.Graph{Nodes: []*ir.Node{conv, hsw}, Initializers: map[string]*ir.Initializer{}}
+	fuseConvActivation(g)
+	if len(g.Nodes) != 1 || conv.OpType != "FusedConv" {
+		t.Fatalf("not fused: %#v", g.Nodes)
+	}
+	if got := conv.GetAttrString("activation", ""); got != "hardswish" {
+		t.Fatalf("activation=%q", got)
+	}
+}
+
 func TestFoldConstantsAdd(t *testing.T) {
 	add := &ir.Node{OpType: "Add", Inputs: []string{"a", "b"}, Outputs: []string{"c"}, Attrs: map[string]ir.AttrValue{}}
 	use := &ir.Node{OpType: "Relu", Inputs: []string{"c"}, Outputs: []string{"y"}, Attrs: map[string]ir.AttrValue{}}
@@ -146,6 +184,17 @@ func TestFoldConstantsAdd(t *testing.T) {
 	folded := g.Initializers["c"]
 	if folded == nil || len(folded.FloatData) != 2 || folded.FloatData[0] != 11 || folded.FloatData[1] != 22 {
 		t.Fatalf("folded=%#v", folded)
+	}
+}
+
+func TestSimplifyTransposesPreservesGraphOutputName(t *testing.T) {
+	// グラフ出力を生成する恒等 Transpose は除去しない(出力名が変わるため)
+	t1 := &ir.Node{OpType: "Transpose", Inputs: []string{"x"}, Outputs: []string{"y"}, Attrs: map[string]ir.AttrValue{"perm": ir.AttrInts{Value: []int64{0, 1}}}}
+	g := &ir.Graph{Nodes: []*ir.Node{t1}, Initializers: map[string]*ir.Initializer{},
+		Outputs: []ir.TensorSpec{{Name: "y"}}}
+	simplifyTransposes(g)
+	if len(g.Nodes) != 1 || g.Outputs[0].Name != "y" {
+		t.Fatalf("graph output renamed: nodes=%d out=%q", len(g.Nodes), g.Outputs[0].Name)
 	}
 }
 

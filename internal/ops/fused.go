@@ -40,16 +40,26 @@ func opFastGELUWithConfig(node *ir.Node, inputs []tensor.Tensor, kc *KernelConfi
 	case *tensor.Dense[float32]:
 		data := make([]float32, t.Len())
 		src := t.Data()
+		workers := 1
+		if len(src) >= elementwiseParallelMin {
+			workers = kc.Workers()
+		}
 		if useFastErf {
 			const invSqrt2 = float32(0.7071067811865476)
-			for i, v := range src {
-				data[i] = 0.5 * v * (1.0 + fastErfF32(v*invSqrt2))
-			}
+			forEachRangeParallel(len(src), workers, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					v := src[i]
+					data[i] = 0.5 * v * (1.0 + fastErfF32(v*invSqrt2))
+				}
+			})
 		} else {
 			invSqrt2 := float64(1.0 / math.Sqrt(2.0))
-			for i, v := range src {
-				data[i] = float32(0.5 * float64(v) * (1.0 + math.Erf(float64(v)*invSqrt2)))
-			}
+			forEachRangeParallel(len(src), workers, func(lo, hi int) {
+				for i := lo; i < hi; i++ {
+					v := src[i]
+					data[i] = float32(0.5 * float64(v) * (1.0 + math.Erf(float64(v)*invSqrt2)))
+				}
+			})
 		}
 		return []tensor.Tensor{tensor.NewDense[float32](t.Shape().Clone(), data)}, nil
 	case *tensor.Dense[float64]:

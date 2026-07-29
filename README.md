@@ -8,7 +8,7 @@ cgo なし・アセンブリなし・ネイティブ依存なしの ピュアGo 
 
 > [!IMPORTANT]
 > 本ライブラリはピュアGo実装であり、SIMD やネイティブライブラリによる最適化は行っていません。<br>
-> そのため、推論性能は ONNX Runtime と比較して、10〜50 倍程度遅くなる傾向があります（モデル・ハードウェア依存）<br>
+> そのため、推論性能は ONNX Runtime と比較して、5〜30 倍程度遅くなる傾向があります（モデル・ハードウェア依存）<br>
 > また、検証できているモデルも限られるため、動作しないモデルも多く存在します。
 >
 > 主な想定用途:
@@ -25,7 +25,7 @@ cgo なし・アセンブリなし・ネイティブ依存なしの ピュアGo 
 - **Pure Go** — `GOOS`/`GOARCH` を問わずクロスコンパイル可能
 - **最小依存** — 外部依存は `google.golang.org/protobuf` のみ
 - **主要オペレーター対応** — ONNX 標準約 200 個中、約 80% を実装（2026/03/25時点）
-- **グラフ最適化** — Conv+BN 融合、LayerNorm/RMSNorm 融合、定数畳み込み、不要ノード除去など 17 パスを自動適用
+- **グラフ最適化** — Conv+BN 融合、LayerNorm/RMSNorm 融合、定数畳み込み、不要ノード除去など 18 パスを自動適用
 
 ## Installation
 
@@ -175,8 +175,9 @@ ONNX 標準約 200 個中、約 80% を実装:
 | `eliminate_identity` | Identity ノード除去 |
 | `fuse_layer_norm` | 分解された LayerNorm → LayerNormalization に融合 |
 | `fuse_rms_norm` | 分解された RMSNorm → RMSNormalization に融合 |
-| `fuse_conv_batchnorm` | Conv + BatchNorm → Conv に融合 |
+| `fuse_hardswish` | Mul(x, HardSigmoid(x)) → HardSwish に融合 |
 | `fuse_conv_add_bias` | Conv + Add(定数) → bias に折込み |
+| `fuse_conv_batchnorm` | Conv + BatchNorm → Conv に融合 |
 | `fuse_conv_activation` | Conv + ReLU/Clip/LeakyReLU → FusedConv |
 | `fuse_conv_silu` | Conv + Sigmoid + Mul → Conv(SiLU) |
 | `fuse_matmul_add_bias` | MatMul + Add → FusedMatMul |
@@ -203,7 +204,7 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | フィールド | デフォルト | 説明 |
 |---|---|---|
 | `UseTiledGEMM` | true | Mc=128/Nc=192/Kc=128 tiled GEMM + microKernel4x8 |
-| `UseDepthwiseKernel` | true | depthwise 3×3 特化カーネル |
+| `UseDepthwiseKernel` | true | depthwise 直接カーネル（3×3 特化 + 任意 K×K、チャネル並列） |
 | `Use1x1FastPath` | true | 1×1 Conv で im2col をスキップ |
 | `UseConvTransposeGEMM` | true | ConvTranspose の GEMM 化 |
 | `UsePoolFastPath` | true | MaxPool 2×2s1/s2 / 3×3s2 特化 |

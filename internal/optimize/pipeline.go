@@ -29,8 +29,12 @@ var pipeline = []passDef{
 	// fuse_mul_add_affine より前に実行しないと LN の Mul+Add が先に奪われる
 	{name: "fuse_layer_norm", run: fuseLayerNormalization},
 	{name: "fuse_rms_norm", run: fuseRMSNormalization},
-	{name: "fuse_conv_batchnorm", run: fuseConvBatchNorm},
+	// fuse_conv_activation より前に HardSwish 単体を作っておく
+	{name: "fuse_hardswish", run: fuseHardSwish},
+	// Conv→Add(bias)→BN の形(Paddle 系 export)で BN 融合が Add に阻まれないよう、
+	// bias 畳み込みを BN 融合より先に行う
 	{name: "fuse_conv_add_bias", run: fuseConvAddBias},
+	{name: "fuse_conv_batchnorm", run: fuseConvBatchNorm},
 	{name: "fuse_conv_activation", run: fuseConvActivation},
 	{name: "fuse_matmul_add_bias", run: fuseMatMulAddBias},
 	{name: "fuse_mul_add_affine", run: fuseMulAddAffine},

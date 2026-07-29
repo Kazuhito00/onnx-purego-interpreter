@@ -82,6 +82,11 @@ func TestConvStripsMatchGenericPath(t *testing.T) {
 		{"5x5dil2", 1, 2, 20, 18, 3, 5, 5, 1, 2, 2, 1, true},
 		{"group2", 1, 4, 12, 12, 6, 3, 3, 1, 1, 1, 2, true},
 		{"1x1pad0", 2, 3, 9, 9, 4, 1, 1, 1, 0, 1, 1, true},
+		// depthwise (group==C==OC): 3x3 以外のカーネルサイズも直接カーネルで処理される
+		{"dw3x3s2p1", 1, 4, 13, 11, 4, 3, 3, 2, 1, 1, 4, true},
+		{"dw5x5p2", 1, 6, 20, 18, 6, 5, 5, 1, 2, 1, 6, true},
+		{"dw7x7p3", 1, 4, 16, 15, 4, 7, 7, 1, 3, 1, 4, false},
+		{"dw5x5big", 1, 8, 64, 64, 8, 5, 5, 1, 2, 1, 8, true}, // 並列 path を通るサイズ
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
