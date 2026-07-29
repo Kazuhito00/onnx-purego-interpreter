@@ -32,6 +32,39 @@ func putFloat32Scratch(buf []float32) {
 // activeKernelConfig is set by closure factories. nil means default (all enabled).
 var activeConvConfig *KernelConfig
 
+// convGemmF32 系は activeConvConfig.UseTiledGEMM を尊重して GEMM 実装を選ぶ。
+// 無効時は microkernel/パッキング/列並列を使わず単純ループで計算する。
+func convGemmF32(A, B, C []float32, M, N, K int) {
+	if activeConvConfig.TiledGEMMEnabled() {
+		gemmF32(A, B, C, M, N, K)
+	} else {
+		gemmF32Simple(A, B, C, M, N, K)
+	}
+}
+
+func convGemmF32WithBias(A, B, C []float32, M, N, K int, bias []float32) {
+	if activeConvConfig.TiledGEMMEnabled() {
+		gemmF32WithBias(A, B, C, M, N, K, bias)
+		return
+	}
+	gemmF32Simple(A, B, C, M, N, K)
+	for i := 0; i < M; i++ {
+		bv := bias[i]
+		cRow := C[i*N : i*N+N : i*N+N] // BCE
+		for j := 0; j < N; j++ {
+			cRow[j] += bv
+		}
+	}
+}
+
+func convGemmF32ParallelCols(A, B, C []float32, M, N, K, maxWorkers int) {
+	if activeConvConfig.TiledGEMMEnabled() {
+		gemmF32ParallelCols(A, B, C, M, N, K, maxWorkers)
+		return
+	}
+	gemmF32Simple(A, B, C, M, N, K)
+}
+
 func makeConv(kc *KernelConfig) OpFunc {
 	return func(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error) {
 		activeConvConfig = kc
@@ -413,7 +446,7 @@ func conv2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T], node *i
 						preferCol = true
 					}
 					if preferCol {
-						gemmF32ParallelCols(wf, xSlice, oSlice, OC, HW, C, cfg.Workers())
+						convGemmF32ParallelCols(wf, xSlice, oSlice, OC, HW, C, cfg.Workers())
 					} else if OC >= 16 {
 						nWorkers := min(cfg.Workers(), OC)
 						chunk := ((OC+nWorkers-1)/nWorkers + 3) &^ 3
@@ -427,15 +460,15 @@ func conv2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T], node *i
 							wg.Add(1)
 							go func(start, end int) {
 								defer wg.Done()
-								gemmF32(wf[start*C:end*C], xSlice, oSlice[start*HW:end*HW], end-start, HW, C)
+								convGemmF32(wf[start*C:end*C], xSlice, oSlice[start*HW:end*HW], end-start, HW, C)
 							}(start, end)
 						}
 						wg.Wait()
 					} else {
-						gemmF32(wf, xSlice, oSlice, OC, HW, C)
+						convGemmF32(wf, xSlice, oSlice, OC, HW, C)
 					}
 				} else {
-					gemmF32(wf, xSlice, oSlice, OC, HW, C)
+					convGemmF32(wf, xSlice, oSlice, OC, HW, C)
 				}
 			}
 			if b != nil {
@@ -563,10 +596,10 @@ func convIm2colGemmStripsF32(
 			go func(ocStart, ocEnd int) {
 				defer wg.Done()
 				if bias != nil {
-					gemmF32WithBias(wf[ocStart*colSize:], col, of[ocStart*patchSize:],
+					convGemmF32WithBias(wf[ocStart*colSize:], col, of[ocStart*patchSize:],
 						ocEnd-ocStart, patchSize, colSize, bias[ocStart:])
 				} else {
-					gemmF32(wf[ocStart*colSize:], col, of[ocStart*patchSize:],
+					convGemmF32(wf[ocStart*colSize:], col, of[ocStart*patchSize:],
 						ocEnd-ocStart, patchSize, colSize)
 				}
 			}(ocStart, ocEnd)
@@ -582,9 +615,9 @@ func convIm2colGemmStripsF32(
 		im2col(xf, col, n, g, C, H, W, icPerGroup,
 			KH, KW, OH, OW, strideH, strideW, padTop, padLeft, dilH, dilW, 0, OH)
 		if bias != nil {
-			gemmF32WithBias(wf, col, of, ocPerGroup, patchSize, colSize, bias)
+			convGemmF32WithBias(wf, col, of, ocPerGroup, patchSize, colSize, bias)
 		} else {
-			gemmF32(wf, col, of, ocPerGroup, patchSize, colSize)
+			convGemmF32(wf, col, of, ocPerGroup, patchSize, colSize)
 		}
 		putFloat32Scratch(col)
 		return
@@ -596,7 +629,7 @@ func convIm2colGemmStripsF32(
 			KH, KW, OH, OW, strideH, strideW, padTop, padLeft, dilH, dilW, ohFrom, ohTo)
 		cbuf := getFloat32Scratch(ocPerGroup * stripPatch)
 		clear(cbuf)
-		gemmF32(wf, col, cbuf, ocPerGroup, stripPatch, colSize)
+		convGemmF32(wf, col, cbuf, ocPerGroup, stripPatch, colSize)
 		// C ストリップを出力の該当列範囲へ行コピー(bias 同時適用)
 		dstBase := ohFrom * OW
 		for oc := 0; oc < ocPerGroup; oc++ {
@@ -717,7 +750,7 @@ func convTranspose2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T]
 				xOff := n * C * HW
 				col := getFloat32Scratch(colSize * HW)
 				clear(col)
-				gemmF32ParallelCols(wt, xf[xOff:xOff+C*HW], col, colSize, HW, C, ctWorkers)
+				convGemmF32ParallelCols(wt, xf[xOff:xOff+C*HW], col, colSize, HW, C, ctWorkers)
 
 				// col2im: scatter col[OC*KH*KW, H*W] → output[OC, OH, OW]
 				// oc ごとに出力先が互いに素なため oc 単位で並列化できる
@@ -953,7 +986,7 @@ func gemmNN[T tensor.Numeric](A, B, C []T, M, N, K int) {
 	if af, ok := any(A).([]float32); ok && M >= 16 && len(A) >= M*K && len(B) >= K*N && len(C) >= M*N {
 		bf := any(B).([]float32)
 		cf := any(C).([]float32)
-		gemmF32(af, bf, cf, M, N, K)
+		convGemmF32(af, bf, cf, M, N, K)
 		return
 	}
 	if M*K+K*N > 32*1024 {

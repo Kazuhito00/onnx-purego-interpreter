@@ -52,6 +52,12 @@ func (kc *KernelConfig) ReduceFastPathEnabled() bool {
 	return kc == nil || kc.UseReduceFastPath
 }
 
+// TiledGEMMEnabled は microKernel 系 tiled GEMM の有効判定(nil = 有効)。
+// 無効時は単純な ikj ループ(gemmF32Simple)へフォールバックする。
+func (kc *KernelConfig) TiledGEMMEnabled() bool {
+	return kc == nil || kc.UseTiledGEMM
+}
+
 // Workers returns the effective number of worker goroutines.
 // If MaxThreads > 0, it is used; otherwise runtime.GOMAXPROCS(0).
 func (kc *KernelConfig) Workers() int {

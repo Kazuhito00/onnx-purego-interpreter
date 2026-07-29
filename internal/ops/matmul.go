@@ -24,6 +24,10 @@ func gemmF32Attention(A, B, C []float32, M, N, K int) {
 		gemmF32PreciseSmall(A, B, C, M, N, K)
 		return
 	}
+	if !activeMatMulConfig.TiledGEMMEnabled() {
+		gemmF32Simple(A, B, C, M, N, K)
+		return
+	}
 	gemmF32(A, B, C, M, N, K)
 }
 
@@ -104,7 +108,7 @@ func opMatMul(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error) {
 
 func opMatMulWithConfig(node *ir.Node, inputs []tensor.Tensor, kc *KernelConfig) ([]tensor.Tensor, error) {
 	a, b := inputs[0], inputs[1]
-	useTiled := kc == nil || kc.UseTiledGEMM
+	useTiled := kc.TiledGEMMEnabled()
 
 	// Fast path: packed weight for 2D MatMul (only with tiled GEMM)
 	if useTiled {

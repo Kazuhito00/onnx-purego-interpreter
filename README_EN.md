@@ -203,7 +203,7 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 
 | Field | Default | Description |
 |---|---|---|
-| `UseTiledGEMM` | true | Mc=128/Nc=192/Kc=128 tiled GEMM + microKernel4x8 |
+| `UseTiledGEMM` | true | Mc=128/Nc=192/Kc=128 tiled GEMM + microKernel4x8 + B panel packing |
 | `UseDepthwiseKernel` | true | Direct depthwise kernel (3×3 specialized + generic K×K, channel-parallel) |
 | `Use1x1FastPath` | true | Skip im2col for 1×1 Conv |
 | `UseConvTransposeGEMM` | true | GEMM-based ConvTranspose |
