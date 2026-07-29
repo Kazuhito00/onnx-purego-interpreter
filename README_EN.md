@@ -25,7 +25,7 @@ A pure Go ONNX inference package — no cgo, no assembly, no native dependencies
 - **Pure Go** — Cross-compile across any `GOOS`/`GOARCH`
 - **Minimal dependencies** — Only `google.golang.org/protobuf`
 - **Broad operator coverage** — ~80% of ~200 ONNX standard operators implemented (as of 2026/03/25)
-- **Graph optimizations** — 13 passes including Conv+BN fusion, Pad+Conv fusion, affine epilogue fusion, and dead node elimination
+- **Graph optimizations** — 17 passes including Conv+BN fusion, LayerNorm/RMSNorm fusion, constant folding, and dead node elimination
 
 ## Installation
 
@@ -139,7 +139,7 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
   → Frontend IR                protobuf-free model representation
   → Canonical IR               normalized semantic graph (Graph, Node, Initializer)
   → Analysis / Validation      graph integrity + opset compatibility checks
-  → Optimization Passes        BN fusion, Conv fusion, GELU fusion, dead node elimination
+  → Optimization Passes        constant folding, BN/Norm/GELU fusion, Conv fusion, dead node elimination
   → Execution Plan / Lowering  slot-based compiled plan + Arena pre-allocation
   → Runtime / Kernels          pure Go kernel execution
 ```
@@ -169,8 +169,12 @@ All passes are enabled by default. Control via session options for debugging or 
 | Pass Name | Description |
 |---|---|
 | `materialize_constants` | Convert Constant ops to initializers |
+| `fold_constants` | Pre-compute constant-only subgraphs |
+| `fuse_pad_conv` | Absorb zero-value Pad into Conv pads attribute |
 | `eliminate_dropout` | Remove Dropout nodes |
 | `eliminate_identity` | Remove Identity nodes |
+| `fuse_layer_norm` | Fuse decomposed LayerNorm → LayerNormalization |
+| `fuse_rms_norm` | Fuse decomposed RMSNorm → RMSNormalization |
 | `fuse_conv_batchnorm` | Fuse Conv + BatchNorm → Conv |
 | `fuse_conv_add_bias` | Fold Conv + Add(const) → bias |
 | `fuse_conv_activation` | Fuse Conv + ReLU/Clip/LeakyReLU → FusedConv |
@@ -178,6 +182,8 @@ All passes are enabled by default. Control via session options for debugging or 
 | `fuse_matmul_add_bias` | Fuse MatMul + Add → FusedMatMul |
 | `fuse_mul_add_affine` | Fuse Mul + Add → FusedAffine |
 | `fuse_gelu` | Fuse Div→Erf→Add→Mul→Mul → FastGELU |
+| `fuse_conv_affine` | Fold FusedConv + FusedAffine → post scale/bias |
+| `simplify_transposes` | Remove identity Transposes and compose adjacent ones |
 | `eliminate_dead_nodes` | Remove unused nodes |
 
 ## Kernel Optimizations
@@ -202,8 +208,10 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | `UseConvTransposeGEMM` | true | GEMM-based ConvTranspose |
 | `UsePoolFastPath` | true | MaxPool 2×2s1/s2 / 3×3s2 specialization |
 | `UseFastErf` | true | Polynomial erf approximation for FastGELU |
-| `UseParallelConv` | true | Goroutine parallelism for large Conv |
+| `UseParallelConv` | true | Goroutine parallelism for large Conv (dynamically scheduled strips) |
 | `MaxThreads` | 0 | Max goroutine count (0 = `runtime.GOMAXPROCS`) |
+
+Large MaxPool / MatMul operations are also parallelized automatically based on input size (parallelism follows `MaxThreads`).
 
 ## Profiling
 

@@ -282,23 +282,30 @@ func padDenseWithMode[T tensor.Numeric](t *tensor.Dense[T], pads []int64, constV
 			out[i] = src[srcIdx]
 		}
 	} else {
-		// Constant padding
+		// Constant padding: 最内次元は連続しているため行単位で copy する
 		if constVal != 0 {
 			for i := range out {
 				out[i] = constVal
 			}
 		}
-		for i := 0; i < t.Len(); i++ {
-			srcIdx := 0
-			outIdx := 0
-			rem := i
-			for d := 0; d < ndim; d++ {
-				coord := rem / srcStrides[d]
-				rem %= srcStrides[d]
-				srcIdx += coord * srcStrides[d]
-				outIdx += (coord + int(pads[d])) * outStrides[d]
+		if t.Len() > 0 {
+			rowLen := shape[ndim-1]
+			nRows := t.Len() / rowLen
+			coords := make([]int, ndim-1)
+			for r := 0; r < nRows; r++ {
+				outIdx := int(pads[ndim-1])
+				for d := 0; d < ndim-1; d++ {
+					outIdx += (coords[d] + int(pads[d])) * outStrides[d]
+				}
+				copy(out[outIdx:outIdx+rowLen], src[r*rowLen:(r+1)*rowLen])
+				for d := ndim - 2; d >= 0; d-- {
+					coords[d]++
+					if coords[d] < shape[d] {
+						break
+					}
+					coords[d] = 0
+				}
 			}
-			out[outIdx] = src[srcIdx]
 		}
 	}
 	return tensor.NewDense[T](outShape, out)

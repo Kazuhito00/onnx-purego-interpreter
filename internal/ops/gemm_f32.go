@@ -1,5 +1,7 @@
 package ops
 
+import "sync"
+
 // Specialized float32 GEMM kernels with microkernel and tiling.
 // Pure Go, no CGo, no assembly.
 
@@ -44,8 +46,41 @@ func gemmF32Simple(A, B, C []float32, M, N, K int) {
 }
 
 func gemmF32Tiled(A, B, C []float32, M, N, K int) {
-	for j0 := 0; j0 < N; j0 += nc {
-		jEnd := min(j0+nc, N)
+	gemmF32TiledCols(A, B, C, M, N, K, 0, N)
+}
+
+// gemmF32ParallelCols は C = A×B を列方向ストライプで並列計算する。
+// 行数 M が小さく列数 N が大きい GEMM(小チャネル・大空間の conv)では
+// 行分割より高い並列度が得られる。
+func gemmF32ParallelCols(A, B, C []float32, M, N, K, maxWorkers int) {
+	stripes := (N + nc - 1) / nc
+	nWorkers := min(maxWorkers, stripes)
+	if nWorkers <= 1 {
+		gemmF32(A, B, C, M, N, K)
+		return
+	}
+	chunk := (stripes + nWorkers - 1) / nWorkers * nc
+	var wg sync.WaitGroup
+	for w := 0; w < nWorkers; w++ {
+		jFrom := w * chunk
+		if jFrom >= N {
+			break
+		}
+		jTo := min(jFrom+chunk, N)
+		wg.Add(1)
+		go func(jFrom, jTo int) {
+			defer wg.Done()
+			gemmF32TiledCols(A, B, C, M, N, K, jFrom, jTo)
+		}(jFrom, jTo)
+	}
+	wg.Wait()
+}
+
+// gemmF32TiledCols は C の列範囲 [jFrom, jTo) のみを計算する。
+// 互いに素な列範囲であれば複数 goroutine から同一 C へ並行に呼び出せる。
+func gemmF32TiledCols(A, B, C []float32, M, N, K, jFrom, jTo int) {
+	for j0 := jFrom; j0 < jTo; j0 += nc {
+		jEnd := min(j0+nc, jTo)
 		for k0 := 0; k0 < K; k0 += kc {
 			kEnd := min(k0+kc, K)
 			kLen := kEnd - k0
@@ -546,7 +581,7 @@ func microKernel1x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 func microKernelMxN(A, B, C []float32, i, j, k0, kLen, lda, ldb, mR, nR int) {
 	for ii := 0; ii < mR; ii++ {
 		aRow := A[(i+ii)*lda+k0 : (i+ii)*lda+k0+kLen : (i+ii)*lda+k0+kLen] // BCE
-		cSlice := C[(i+ii)*ldb+j : (i+ii)*ldb+j+nR : (i+ii)*ldb+j+nR]     // BCE
+		cSlice := C[(i+ii)*ldb+j : (i+ii)*ldb+j+nR : (i+ii)*ldb+j+nR]      // BCE
 		bIdx := k0*ldb + j
 		for k := 0; k < kLen; k++ {
 			aik := aRow[k]

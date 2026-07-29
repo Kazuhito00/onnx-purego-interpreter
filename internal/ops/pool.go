@@ -2,6 +2,8 @@ package ops
 
 import (
 	"fmt"
+	"sync"
+	"sync/atomic"
 
 	"github.com/Kazuhito00/onnx-purego-interpreter/internal/ir"
 	"github.com/Kazuhito00/onnx-purego-interpreter/tensor"
@@ -61,138 +63,168 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 	outData := make([]T, outShape.Size())
 	xData := x.Data()
 
+	// (n,c) 平面ごとに独立なため、大きな入力ではチャネル単位で並列化する
+	poolWorkers := 1
+	if OH*OW*KH*KW*N*C > 200_000 && N*C >= 2 {
+		cfg := activePoolConfig
+		if cfg == nil {
+			cfg = DefaultKernelConfig()
+		}
+		poolWorkers = cfg.Workers()
+	}
+
 	// Fast path: 2x2 stride 2, no padding
 	usePoolFP := activePoolConfig == nil || activePoolConfig.UsePoolFastPath
 	if usePoolFP && KH == 2 && KW == 2 && strideH == 2 && strideW == 2 && padTop == 0 && padLeft == 0 {
-		for n := 0; n < N; n++ {
-			for c := 0; c < C; c++ {
-				xBase := n*C*H*W + c*H*W
-				oBase := n*C*OH*OW + c*OH*OW
-				for oh := 0; oh < OH; oh++ {
-					ih := oh * 2
-					for ow := 0; ow < OW; ow++ {
-						iw := ow * 2
-						r0 := xBase + ih*W + iw
-						r1 := r0 + W
-						_ = xData[r1+1] // BCE hint
-						v0 := xData[r0]
-						v1 := xData[r0+1]
-						v2 := xData[r1]
-						v3 := xData[r1+1]
-						m := v0
-						if v1 > m {
-							m = v1
-						}
-						if v2 > m {
-							m = v2
-						}
-						if v3 > m {
-							m = v3
-						}
-						outData[oBase+oh*OW+ow] = m
+		forEachIndexParallel(N*C, poolWorkers, func(nc int) {
+			xBase := nc * H * W
+			oBase := nc * OH * OW
+			for oh := 0; oh < OH; oh++ {
+				ih := oh * 2
+				for ow := 0; ow < OW; ow++ {
+					iw := ow * 2
+					r0 := xBase + ih*W + iw
+					r1 := r0 + W
+					_ = xData[r1+1] // BCE hint
+					v0 := xData[r0]
+					v1 := xData[r0+1]
+					v2 := xData[r1]
+					v3 := xData[r1+1]
+					m := v0
+					if v1 > m {
+						m = v1
 					}
+					if v2 > m {
+						m = v2
+					}
+					if v3 > m {
+						m = v3
+					}
+					outData[oBase+oh*OW+ow] = m
 				}
 			}
-		}
+		})
 		return tensor.NewDense[T](outShape, outData), nil
 	}
 
 	// Fast path: 2x2 stride 1, no padding.
 	if usePoolFP && KH == 2 && KW == 2 && strideH == 1 && strideW == 1 &&
 		padTop == 0 && padLeft == 0 && padBottom == 0 && padRight == 0 {
-		for n := 0; n < N; n++ {
-			for c := 0; c < C; c++ {
-				xBase := (n*C + c) * H * W
-				oBase := (n*C + c) * OH * OW
-				for oh := 0; oh < OH; oh++ {
-					r0, r1 := xBase+oh*W, xBase+(oh+1)*W
-					for ow := 0; ow < OW; ow++ {
-						v0, v1 := xData[r0+ow], xData[r0+ow+1]
-						v2, v3 := xData[r1+ow], xData[r1+ow+1]
-						m := v0
-						if v1 > m {
-							m = v1
-						}
-						if v2 > m {
-							m = v2
-						}
-						if v3 > m {
-							m = v3
-						}
-						outData[oBase+oh*OW+ow] = m
+		forEachIndexParallel(N*C, poolWorkers, func(nc int) {
+			xBase := nc * H * W
+			oBase := nc * OH * OW
+			for oh := 0; oh < OH; oh++ {
+				r0, r1 := xBase+oh*W, xBase+(oh+1)*W
+				for ow := 0; ow < OW; ow++ {
+					v0, v1 := xData[r0+ow], xData[r0+ow+1]
+					v2, v3 := xData[r1+ow], xData[r1+ow+1]
+					m := v0
+					if v1 > m {
+						m = v1
 					}
+					if v2 > m {
+						m = v2
+					}
+					if v3 > m {
+						m = v3
+					}
+					outData[oBase+oh*OW+ow] = m
 				}
 			}
-		}
+		})
 		return tensor.NewDense[T](outShape, outData), nil
 	}
 	// Fast path: 3x3 stride 2 (with or without padding)
 	if usePoolFP && KH == 3 && KW == 3 && strideH == 2 && strideW == 2 {
-		for n := 0; n < N; n++ {
-			for c := 0; c < C; c++ {
-				xBase := n*C*H*W + c*H*W
-				oBase := n*C*OH*OW + c*OH*OW
-				for oh := 0; oh < OH; oh++ {
-					ih0 := oh*2 - padTop
-					for ow := 0; ow < OW; ow++ {
-						iw0 := ow*2 - padLeft
-						first := true
-						var maxVal T
-						for kh := 0; kh < 3; kh++ {
-							ih := ih0 + kh
-							if ih < 0 || ih >= H {
-								continue
-							}
-							row := xBase + ih*W
-							for kw := 0; kw < 3; kw++ {
-								iw := iw0 + kw
-								if iw < 0 || iw >= W {
-									continue
-								}
-								v := xData[row+iw]
-								if first || v > maxVal {
-									first = false
-									maxVal = v
-								}
-							}
-						}
-						outData[oBase+oh*OW+ow] = maxVal
-					}
-				}
-			}
-		}
-		return tensor.NewDense[T](outShape, outData), nil
-	}
-
-	// General path
-	for n := 0; n < N; n++ {
-		for c := 0; c < C; c++ {
-			xBase := n*C*H*W + c*H*W
-			oBase := n*C*OH*OW + c*OH*OW
+		forEachIndexParallel(N*C, poolWorkers, func(nc int) {
+			xBase := nc * H * W
+			oBase := nc * OH * OW
 			for oh := 0; oh < OH; oh++ {
+				ih0 := oh*2 - padTop
 				for ow := 0; ow < OW; ow++ {
+					iw0 := ow*2 - padLeft
 					first := true
 					var maxVal T
-					for kh := 0; kh < KH; kh++ {
-						for kw := 0; kw < KW; kw++ {
-							ih := oh*strideH - padTop + kh
-							iw := ow*strideW - padLeft + kw
-							if ih >= 0 && ih < H && iw >= 0 && iw < W {
-								v := xData[xBase+ih*W+iw]
-								if first || v > maxVal {
-									first = false
-									maxVal = v
-								}
+					for kh := 0; kh < 3; kh++ {
+						ih := ih0 + kh
+						if ih < 0 || ih >= H {
+							continue
+						}
+						row := xBase + ih*W
+						for kw := 0; kw < 3; kw++ {
+							iw := iw0 + kw
+							if iw < 0 || iw >= W {
+								continue
+							}
+							v := xData[row+iw]
+							if first || v > maxVal {
+								first = false
+								maxVal = v
 							}
 						}
 					}
 					outData[oBase+oh*OW+ow] = maxVal
 				}
 			}
-		}
+		})
+		return tensor.NewDense[T](outShape, outData), nil
 	}
 
+	// General path
+	forEachIndexParallel(N*C, poolWorkers, func(nc int) {
+		xBase := nc * H * W
+		oBase := nc * OH * OW
+		for oh := 0; oh < OH; oh++ {
+			for ow := 0; ow < OW; ow++ {
+				first := true
+				var maxVal T
+				for kh := 0; kh < KH; kh++ {
+					for kw := 0; kw < KW; kw++ {
+						ih := oh*strideH - padTop + kh
+						iw := ow*strideW - padLeft + kw
+						if ih >= 0 && ih < H && iw >= 0 && iw < W {
+							v := xData[xBase+ih*W+iw]
+							if first || v > maxVal {
+								first = false
+								maxVal = v
+							}
+						}
+					}
+				}
+				outData[oBase+oh*OW+ow] = maxVal
+			}
+		}
+	})
+
 	return tensor.NewDense[T](outShape, outData), nil
+}
+
+// forEachIndexParallel は fn(0..count-1) を最大 workers 並列で実行する。
+// 動的分配のため P/E コア混在でも負荷が偏らない。fn は互いに独立であること。
+func forEachIndexParallel(count, workers int, fn func(idx int)) {
+	if workers <= 1 || count <= 1 {
+		for i := 0; i < count; i++ {
+			fn(i)
+		}
+		return
+	}
+	nWorkers := min(workers, count)
+	var next atomic.Int32
+	var wg sync.WaitGroup
+	for w := 0; w < nWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				i := int(next.Add(1)) - 1
+				if i >= count {
+					return
+				}
+				fn(i)
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func opAveragePool(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error) {

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"sync"
+	"sync/atomic"
 
 	"github.com/Kazuhito00/onnx-purego-interpreter/internal/ir"
 	"github.com/Kazuhito00/onnx-purego-interpreter/tensor"
@@ -353,27 +354,35 @@ func conv2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T], node *i
 				xSlice := xf[n*C*HW : (n+1)*C*HW]
 				oSlice := outData[n*OC*HW : (n+1)*OC*HW]
 				work := OC * HW * C
-				if work > 500_000 && OC >= 16 && (kc == nil || kc.UseParallelConv) {
+				if work > 500_000 && (kc == nil || kc.UseParallelConv) {
 					cfg := kc
 					if cfg == nil {
 						cfg = DefaultKernelConfig()
 					}
-					nWorkers := min(cfg.Workers(), OC)
-					chunk := ((OC+nWorkers-1)/nWorkers + 3) &^ 3
-					var wg sync.WaitGroup
-					for worker := 0; worker < nWorkers; worker++ {
-						start := worker * chunk
-						end := min(start+chunk, OC)
-						if start >= end {
-							break
+					// OC(行)が小さいと行分割では worker 数が頭打ちになるため、
+					// 列ストライプ数が行チャンク数を上回る場合は列(HW)方向に分割する
+					if (HW+nc-1)/nc > OC/4 {
+						gemmF32ParallelCols(wf, xSlice, oSlice, OC, HW, C, cfg.Workers())
+					} else if OC >= 16 {
+						nWorkers := min(cfg.Workers(), OC)
+						chunk := ((OC+nWorkers-1)/nWorkers + 3) &^ 3
+						var wg sync.WaitGroup
+						for worker := 0; worker < nWorkers; worker++ {
+							start := worker * chunk
+							end := min(start+chunk, OC)
+							if start >= end {
+								break
+							}
+							wg.Add(1)
+							go func(start, end int) {
+								defer wg.Done()
+								gemmF32(wf[start*C:end*C], xSlice, oSlice[start*HW:end*HW], end-start, HW, C)
+							}(start, end)
 						}
-						wg.Add(1)
-						go func(start, end int) {
-							defer wg.Done()
-							gemmF32(wf[start*C:end*C], xSlice, oSlice[start*HW:end*HW], end-start, HW, C)
-						}(start, end)
+						wg.Wait()
+					} else {
+						gemmF32(wf, xSlice, oSlice, OC, HW, C)
 					}
-					wg.Wait()
 				} else {
 					gemmF32(wf, xSlice, oSlice, OC, HW, C)
 				}
@@ -408,77 +417,147 @@ func conv2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T], node *i
 
 	// Parallelism threshold: only when GEMM is large enough to amortize overhead
 	gemmWork := ocPerGroup * patchSize * colSize
-	useParallel := gemmWork > 500_000 && ocPerGroup >= 16 && (kc == nil || kc.UseParallelConv)
-	nWorkers := 1
-	if useParallel {
-		nWorkers = kc.Workers()
-		if nWorkers > ocPerGroup {
-			nWorkers = ocPerGroup
+	maxWorkers := 1
+	if gemmWork > 500_000 && (kc == nil || kc.UseParallelConv) {
+		cfg := kc
+		if cfg == nil {
+			cfg = DefaultKernelConfig()
 		}
+		maxWorkers = cfg.Workers()
 	}
 
+	xf, xIsF32 := any(xData).([]float32)
+	wf, wIsF32 := any(wData).([]float32)
 	for n := 0; n < N; n++ {
 		for g := 0; g < group; g++ {
-			var pooledCol []float32
-			var col []T
-			if _, ok := any(xData).([]float32); ok {
-				pooledCol = getFloat32Scratch(colSize * patchSize)
-				col = any(pooledCol).([]T)
-			} else {
-				col = make([]T, colSize*patchSize)
-			}
-			im2col(xData, col, n, g, C, H, W, icPerGroup,
-				KH, KW, OH, OW, strideH, strideW, padTop, padLeft, dilH, dilW)
-
 			wOff := g * ocPerGroup * colSize
 			oOff := n*OC*patchSize + g*ocPerGroup*patchSize
 
-			// Fused GEMM + bias (same cache pass)
-			if nWorkers <= 1 {
+			if xIsF32 && wIsF32 {
+				var bias []float32
 				if b != nil {
-					if _, ok := any(wData).([]float32); ok && len(wData[wOff:]) >= ocPerGroup*colSize && len(col) >= colSize*patchSize && len(outData[oOff:]) >= ocPerGroup*patchSize && len(b.Data()[g*ocPerGroup:]) >= ocPerGroup {
-						gemmF32WithBias(
-							any(wData[wOff:]).([]float32),
-							any(col).([]float32),
-							any(outData[oOff:]).([]float32),
-							ocPerGroup, patchSize, colSize,
-							any(b.Data()[g*ocPerGroup:]).([]float32),
-						)
-					} else {
-						gemmNN(wData[wOff:], col, outData[oOff:], ocPerGroup, patchSize, colSize)
-						addBiasGroup(outData[oOff:], b.Data()[g*ocPerGroup:], ocPerGroup, patchSize)
-					}
-				} else {
-					gemmNN(wData[wOff:], col, outData[oOff:], ocPerGroup, patchSize, colSize)
+					bias = any(b.Data()).([]float32)[g*ocPerGroup : (g+1)*ocPerGroup]
 				}
-			} else {
-				var wg sync.WaitGroup
-				// Round chunk size up to MR=4 boundary to avoid tail kernel explosion
-				chunkSize := ((ocPerGroup+nWorkers-1)/nWorkers + 3) &^ 3
-				for w := 0; w < nWorkers; w++ {
-					ocStart := w * chunkSize
-					ocEnd := min(ocStart+chunkSize, ocPerGroup)
-					if ocStart >= ocEnd {
-						break
-					}
-					wg.Add(1)
-					go func(ocStart, ocEnd int) {
-						defer wg.Done()
-						gemmNN(wData[wOff+ocStart*colSize:], col,
-							outData[oOff+ocStart*patchSize:],
-							ocEnd-ocStart, patchSize, colSize)
-					}(ocStart, ocEnd)
-				}
-				wg.Wait()
-				if b != nil {
-					addBiasGroup(outData[oOff:], b.Data()[g*ocPerGroup:], ocPerGroup, patchSize)
-				}
+				convIm2colGemmStripsF32(
+					xf, wf[wOff:wOff+ocPerGroup*colSize], bias,
+					any(outData).([]float32)[oOff:oOff+ocPerGroup*patchSize],
+					n, g, C, H, W, icPerGroup, ocPerGroup,
+					KH, KW, OH, OW, strideH, strideW, padTop, padLeft, dilH, dilW,
+					maxWorkers)
+				continue
 			}
-			putFloat32Scratch(pooledCol)
+
+			// 汎用フォールバック(float32 以外)
+			col := make([]T, colSize*patchSize)
+			im2col(xData, col, n, g, C, H, W, icPerGroup,
+				KH, KW, OH, OW, strideH, strideW, padTop, padLeft, dilH, dilW, 0, OH)
+			gemmNN(wData[wOff:], col, outData[oOff:], ocPerGroup, patchSize, colSize)
+			if b != nil {
+				addBiasGroup(outData[oOff:], b.Data()[g*ocPerGroup:], ocPerGroup, patchSize)
+			}
 		}
 	}
 
 	return tensor.NewDense[T](outShape, outData), nil
+}
+
+// convStripTargetFloats は 1 ストリップの col バッファの目標要素数(≈768KB)。
+// col を L2 キャッシュ内に保つことで im2col 結果の RAM 往復を避ける。
+// テストから縮小してストリップ分割を強制できるよう変数にしている。
+var convStripTargetFloats = 192 * 1024
+
+// convIm2colGemmStripsF32 は im2col + GEMM を出力行ストリップ単位で融合実行する。
+// col 行列全体(数十 MB になり得る)を作らず、L2 に収まるストリップごとに
+// im2col → GEMM → bias 付きコピーを行い、ストリップを worker に動的分配する。
+func convIm2colGemmStripsF32(
+	xf, wf, bias, of []float32,
+	n, g, C, H, W, icPerGroup, ocPerGroup int,
+	KH, KW, OH, OW, strideH, strideW, padTop, padLeft, dilH, dilW int,
+	maxWorkers int,
+) {
+	colSize := icPerGroup * KH * KW
+	patchSize := OH * OW
+
+	// ストリップ行数: A(重み)の再読込を抑えるため 1 ストリップ ≥ nc 列を確保しつつ、
+	// col ストリップが L2 に収まる範囲に抑える
+	minRows := (nc + OW - 1) / OW
+	l2Rows := convStripTargetFloats / (colSize * OW)
+	stripRows := max(minRows, l2Rows)
+	// worker より十分多くのストリップを作り端数を平準化(下限は minRows)
+	if maxWorkers > 1 {
+		if perW := (OH + maxWorkers - 1) / maxWorkers; stripRows > perW {
+			stripRows = max(minRows, perW)
+		}
+	}
+	stripRows = min(stripRows, OH)
+
+	// 単一ストリップなら中間バッファを介さず出力へ直接 GEMM(bias 融合)
+	if stripRows >= OH {
+		col := getFloat32Scratch(colSize * patchSize)
+		im2col(xf, col, n, g, C, H, W, icPerGroup,
+			KH, KW, OH, OW, strideH, strideW, padTop, padLeft, dilH, dilW, 0, OH)
+		if bias != nil {
+			gemmF32WithBias(wf, col, of, ocPerGroup, patchSize, colSize, bias)
+		} else {
+			gemmF32(wf, col, of, ocPerGroup, patchSize, colSize)
+		}
+		putFloat32Scratch(col)
+		return
+	}
+
+	nStrips := (OH + stripRows - 1) / stripRows
+	runStrip := func(ohFrom, ohTo int) {
+		stripPatch := (ohTo - ohFrom) * OW
+		col := getFloat32Scratch(colSize * stripPatch)
+		im2col(xf, col, n, g, C, H, W, icPerGroup,
+			KH, KW, OH, OW, strideH, strideW, padTop, padLeft, dilH, dilW, ohFrom, ohTo)
+		cbuf := getFloat32Scratch(ocPerGroup * stripPatch)
+		clear(cbuf)
+		gemmF32(wf, col, cbuf, ocPerGroup, stripPatch, colSize)
+		// C ストリップを出力の該当列範囲へ行コピー(bias 同時適用)
+		dstBase := ohFrom * OW
+		for oc := 0; oc < ocPerGroup; oc++ {
+			src := cbuf[oc*stripPatch : (oc+1)*stripPatch]
+			dst := of[oc*patchSize+dstBase : oc*patchSize+dstBase+stripPatch]
+			if bias != nil {
+				bv := bias[oc]
+				for i, v := range src {
+					dst[i] = v + bv
+				}
+			} else {
+				copy(dst, src)
+			}
+		}
+		putFloat32Scratch(cbuf)
+		putFloat32Scratch(col)
+	}
+
+	nWorkers := min(maxWorkers, nStrips)
+	if nWorkers <= 1 {
+		for s := 0; s < nStrips; s++ {
+			ohFrom := s * stripRows
+			runStrip(ohFrom, min(ohFrom+stripRows, OH))
+		}
+		return
+	}
+	// 動的分配: P/E コア混在でも遅い worker がボトルネックにならない
+	var nextStrip atomic.Int32
+	var wg sync.WaitGroup
+	for w := 0; w < nWorkers; w++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for {
+				s := int(nextStrip.Add(1)) - 1
+				if s >= nStrips {
+					return
+				}
+				ohFrom := s * stripRows
+				runStrip(ohFrom, min(ohFrom+stripRows, OH))
+			}
+		}()
+	}
+	wg.Wait()
 }
 
 func convTranspose2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T], node *ir.Node) (*tensor.Dense[T], error) {
@@ -647,21 +726,23 @@ func addBiasGroup[T tensor.Numeric](out []T, bias []T, ocPerGroup, patchSize int
 }
 
 // im2col extracts image patches into a column matrix.
-// col layout: [icPerGroup*KH*KW, OH*OW]
+// 出力行の範囲 [ohFrom, ohTo) のみを書き出す(ストリップ実行用)。
+// col layout: [icPerGroup*KH*KW, (ohTo-ohFrom)*OW]
 func im2col[T tensor.Numeric](
 	xData []T, col []T,
 	n, g, C, H, W, icPerGroup, KH, KW, OH, OW,
-	strideH, strideW, padTop, padLeft, dilH, dilW int,
+	strideH, strideW, padTop, padLeft, dilH, dilW, ohFrom, ohTo int,
 ) {
 	HW := H * W
+	stripPatch := (ohTo - ohFrom) * OW
 
 	// Fast path: 1x1 kernel, stride 1, no padding → just copy input rows
 	if KH == 1 && KW == 1 && strideH == 1 && strideW == 1 &&
 		padTop == 0 && padLeft == 0 && OH == H && OW == W {
 		for ic := 0; ic < icPerGroup; ic++ {
 			absIC := g*icPerGroup + ic
-			src := n*C*HW + absIC*HW
-			copy(col[ic*HW:(ic+1)*HW], xData[src:src+HW])
+			src := n*C*HW + absIC*HW + ohFrom*W
+			copy(col[ic*stripPatch:(ic+1)*stripPatch], xData[src:src+stripPatch])
 		}
 		return
 	}
@@ -677,7 +758,7 @@ func im2col[T tensor.Numeric](
 			xBase := n*C*HW + absIC*HW
 			for kh := 0; kh < KH; kh++ {
 				for kw := 0; kw < KW; kw++ {
-					for oh := 0; oh < OH; oh++ {
+					for oh := ohFrom; oh < ohTo; oh++ {
 						ih := oh*strideH + kh
 						rowBase := xBase + ih*W
 						for ow := 0; ow < OW; ow++ {
@@ -698,7 +779,7 @@ func im2col[T tensor.Numeric](
 		xBase := n*C*HW + absIC*HW
 		for kh := 0; kh < KH; kh++ {
 			for kw := 0; kw < KW; kw++ {
-				for oh := 0; oh < OH; oh++ {
+				for oh := ohFrom; oh < ohTo; oh++ {
 					ih := oh*strideH - padTop + kh*dilH
 					if ih < 0 || ih >= H {
 						for ow := 0; ow < OW; ow++ {

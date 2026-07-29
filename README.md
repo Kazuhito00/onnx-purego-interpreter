@@ -25,7 +25,7 @@ cgo なし・アセンブリなし・ネイティブ依存なしの ピュアGo 
 - **Pure Go** — `GOOS`/`GOARCH` を問わずクロスコンパイル可能
 - **最小依存** — 外部依存は `google.golang.org/protobuf` のみ
 - **主要オペレーター対応** — ONNX 標準約 200 個中、約 80% を実装（2026/03/25時点）
-- **グラフ最適化** — Conv+BN 融合、GELU 融合、不要ノード除去など 11 パスを自動適用
+- **グラフ最適化** — Conv+BN 融合、LayerNorm/RMSNorm 融合、定数畳み込み、不要ノード除去など 17 パスを自動適用
 
 ## Installation
 
@@ -139,7 +139,7 @@ sess, err := onnx.NewSessionWithOptions(modelBytes,
   → Frontend IR                protobuf から分離したモデル表現
   → Canonical IR               正規化済み意味グラフ (Graph, Node, Initializer)
   → Analysis / Validation      グラフ整合性 + opset 互換性チェック
-  → Optimization Passes        BN融合, Conv融合, GELU融合, 不要ノード除去
+  → Optimization Passes        定数畳み込み, BN/Norm/GELU 融合, Conv 融合, 不要ノード除去
   → Execution Plan / Lowering  slot-based compiled plan + Arena 事前確保
   → Runtime / Kernels          Pure Go カーネルで推論実行
 ```
@@ -169,8 +169,12 @@ ONNX 標準約 200 個中、約 80% を実装:
 | パス名 | 説明 |
 |---|---|
 | `materialize_constants` | Constant op を初期化子に変換 |
+| `fold_constants` | 定数のみから成るサブグラフを事前計算 |
+| `fuse_pad_conv` | 零値 Pad → Conv の pads 属性に吸収 |
 | `eliminate_dropout` | Dropout ノード除去 |
 | `eliminate_identity` | Identity ノード除去 |
+| `fuse_layer_norm` | 分解された LayerNorm → LayerNormalization に融合 |
+| `fuse_rms_norm` | 分解された RMSNorm → RMSNormalization に融合 |
 | `fuse_conv_batchnorm` | Conv + BatchNorm → Conv に融合 |
 | `fuse_conv_add_bias` | Conv + Add(定数) → bias に折込み |
 | `fuse_conv_activation` | Conv + ReLU/Clip/LeakyReLU → FusedConv |
@@ -178,6 +182,8 @@ ONNX 標準約 200 個中、約 80% を実装:
 | `fuse_matmul_add_bias` | MatMul + Add → FusedMatMul |
 | `fuse_mul_add_affine` | Mul + Add → FusedAffine |
 | `fuse_gelu` | Div→Erf→Add→Mul→Mul → FastGELU |
+| `fuse_conv_affine` | FusedConv + FusedAffine → post scale/bias に折込み |
+| `simplify_transposes` | 恒等 Transpose 除去と隣接 Transpose の合成 |
 | `eliminate_dead_nodes` | 未使用ノード除去 |
 
 ## Kernel Optimizations
@@ -202,8 +208,10 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | `UseConvTransposeGEMM` | true | ConvTranspose の GEMM 化 |
 | `UsePoolFastPath` | true | MaxPool 2×2s1/s2 / 3×3s2 特化 |
 | `UseFastErf` | true | FastGELU 用の多項式近似 erf |
-| `UseParallelConv` | true | 大きな Conv の goroutine 並列化 |
+| `UseParallelConv` | true | 大きな Conv の goroutine 並列化（ストリップ単位の動的分配） |
 | `MaxThreads` | 0 | 最大 goroutine 並列数 (0 = `runtime.GOMAXPROCS`) |
+
+大きな MaxPool / MatMul も入力サイズに応じて自動的に並列化されます（並列度は `MaxThreads` に従います）。
 
 ## Profiling
 

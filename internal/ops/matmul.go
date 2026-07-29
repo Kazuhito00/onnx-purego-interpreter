@@ -109,14 +109,21 @@ func opMatMulWithConfig(node *ir.Node, inputs []tensor.Tensor, kc *KernelConfig)
 	// Fast path: packed weight for 2D MatMul (only with tiled GEMM)
 	if useTiled {
 	if pb, ok := b.(*tensor.PackedF32); ok {
-		if at, ok := a.(*tensor.Dense[float32]); ok && at.Shape().NDim() == 2 {
-			M := at.Shape()[0]
+		// 2D 重みは a の末尾次元さえ一致すれば N-D でも [ΣM, K]×[K, N] に平坦化できる
+		if at, ok := a.(*tensor.Dense[float32]); ok && at.Shape().NDim() >= 2 &&
+			at.Shape()[at.Shape().NDim()-1] == pb.K {
+			as := at.Shape()
+			M := at.Len() / pb.K
 			N := pb.N
 			outData := make([]float32, M*N)
-			gemmF32Packed(at.Data(), &PackedB{Data: pb.Packed, K: pb.K, N: pb.N}, outData, M)
-			return []tensor.Tensor{tensor.NewDense[float32](tensor.Shape{M, N}, outData)}, nil
+			gemmF32PackedParallel(at.Data(), &PackedB{Data: pb.Packed, K: pb.K, N: pb.N},
+				outData, M, activeMatMulConfig.Workers())
+			outShape := make(tensor.Shape, as.NDim())
+			copy(outShape, as[:as.NDim()-1])
+			outShape[as.NDim()-1] = N
+			return []tensor.Tensor{tensor.NewDense[float32](outShape, outData)}, nil
 		}
-		// N-D with packed: fall back to original data
+		// 形状不一致時: fall back to original data
 		if at, ok := a.(*tensor.Dense[float32]); ok {
 			bt := tensor.NewDense[float32](pb.Shape(), pb.Original)
 			out, err := doMatMul(at, bt)
@@ -306,6 +313,29 @@ func doMatMul[T tensor.Numeric](a, b *tensor.Dense[T]) (*tensor.Dense[T], error)
 				}(start, end)
 			}
 			wg.Wait()
+		} else if workPerBatch >= 500_000 && M >= 8 && activeMatMulConfig.Workers() > 1 {
+			// バッチ数が少なく 1 バッチが大きい場合は M(行)方向に並列化する
+			nWorkers := min(activeMatMulConfig.Workers(), (M+3)/4)
+			chunk := ((M+nWorkers-1)/nWorkers + 3) &^ 3
+			for batch := 0; batch < batchSize; batch++ {
+				o := offsets[batch]
+				var wg sync.WaitGroup
+				for w := 0; w < nWorkers; w++ {
+					i0 := w * chunk
+					if i0 >= M {
+						break
+					}
+					i1 := min(i0+chunk, M)
+					wg.Add(1)
+					go func(i0, i1 int) {
+						defer wg.Done()
+						gemmF32Attention(af[o.aOff+i0*K:o.aOff+i1*K],
+							bf[o.bOff:o.bOff+bMatSize],
+							of[o.oOff+i0*N:o.oOff+i1*N], i1-i0, N, K)
+					}(i0, i1)
+				}
+				wg.Wait()
+			}
 		} else {
 			for batch := 0; batch < batchSize; batch++ {
 				o := offsets[batch]

@@ -77,6 +77,23 @@ func opFusedMatMul(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, erro
 
 	// Then add bias
 	if len(inputs) > 2 && inputs[2] != nil {
+		// Fast path: 最終次元への broadcast add は結果テンソルへ in-place で行う
+		// (MatMul の結果は新規確保のため書き換えて安全)
+		if rt, ok := results[0].(*tensor.Dense[float32]); ok {
+			if bt, ok := inputs[2].(*tensor.Dense[float32]); ok {
+				shape := rt.Shape()
+				if n := shape[shape.NDim()-1]; bt.Len() == n && rt.Len()%n == 0 {
+					data, bias := rt.Data(), bt.Data()
+					for i := 0; i < len(data); i += n {
+						row := data[i : i+n : i+n]
+						for j, bv := range bias {
+							row[j] += bv
+						}
+					}
+					return results, nil
+				}
+			}
+		}
 		biasInputs := []tensor.Tensor{results[0], inputs[2]}
 		biased, err := dispatchBinaryOp(biasInputs,
 			func(a, b float32) float32 { return a + b },

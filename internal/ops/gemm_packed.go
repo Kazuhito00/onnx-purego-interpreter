@@ -1,6 +1,10 @@
 package ops
 
-import "github.com/Kazuhito00/onnx-purego-interpreter/tensor"
+import (
+	"sync"
+
+	"github.com/Kazuhito00/onnx-purego-interpreter/tensor"
+)
 
 // Ensure tensor import is used
 var _ tensor.Shape
@@ -53,6 +57,31 @@ func PackMatMulB(B []float32, K, N int) *PackedB {
 		}
 	}
 	return &PackedB{Data: packed, K: K, N: N}
+}
+
+// gemmF32PackedParallel は gemmF32Packed を M(行)チャンクで並列実行する。
+// 各 worker は C の互いに素な行範囲のみ書き込むためロック不要。
+func gemmF32PackedParallel(A []float32, pb *PackedB, C []float32, M, maxWorkers int) {
+	if maxWorkers <= 1 || M < 8 || M*pb.N*pb.K < 500_000 {
+		gemmF32Packed(A, pb, C, M)
+		return
+	}
+	nWorkers := min(maxWorkers, (M+3)/4)
+	chunk := ((M+nWorkers-1)/nWorkers + 3) &^ 3
+	var wg sync.WaitGroup
+	for w := 0; w < nWorkers; w++ {
+		i0 := w * chunk
+		if i0 >= M {
+			break
+		}
+		i1 := min(i0+chunk, M)
+		wg.Add(1)
+		go func(i0, i1 int) {
+			defer wg.Done()
+			gemmF32Packed(A[i0*pb.K:], pb, C[i0*pb.N:], i1-i0)
+		}(i0, i1)
+	}
+	wg.Wait()
 }
 
 // gemmF32Packed computes C += A * packedB where A[M,K], C[M,N].

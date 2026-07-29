@@ -22,9 +22,13 @@ type PassResult struct {
 
 var pipeline = []passDef{
 	{name: "materialize_constants", run: materializeConstants},
+	{name: "fold_constants", run: foldConstants},
 	{name: "fuse_pad_conv", run: fusePadConv},
 	{name: "eliminate_dropout", run: eliminateDropout},
 	{name: "eliminate_identity", run: eliminateIdentity},
+	// fuse_mul_add_affine より前に実行しないと LN の Mul+Add が先に奪われる
+	{name: "fuse_layer_norm", run: fuseLayerNormalization},
+	{name: "fuse_rms_norm", run: fuseRMSNormalization},
 	{name: "fuse_conv_batchnorm", run: fuseConvBatchNorm},
 	{name: "fuse_conv_add_bias", run: fuseConvAddBias},
 	{name: "fuse_conv_activation", run: fuseConvActivation},
@@ -33,6 +37,7 @@ var pipeline = []passDef{
 	{name: "fuse_gelu", run: fuseGELU},
 	{name: "fuse_conv_silu", run: fuseConvSiLU},
 	{name: "fuse_conv_affine", run: fuseConvAffine},
+	{name: "simplify_transposes", run: simplifyTransposes},
 	{name: "eliminate_dead_nodes", run: eliminateDeadNodes},
 }
 

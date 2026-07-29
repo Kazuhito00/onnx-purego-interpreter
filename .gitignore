@@ -66,3 +66,4 @@ examples/*/result.*
 
 /.claude/settings.local.json
 /CLAUDE.md
+/examples/DEIMv2/deimv2_hgnetv2_atto_640x640_500epoch_stg2.onnx
