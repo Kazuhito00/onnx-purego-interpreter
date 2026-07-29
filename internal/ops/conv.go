@@ -491,8 +491,42 @@ func convIm2colGemmStripsF32(
 	}
 	stripRows = min(stripRows, OH)
 
+	nStrips := (OH + stripRows - 1) / stripRows
+
+	// ストリップ数で十分な並列度が得られない場合(深い層の小空間 conv 等)は、
+	// col 全体を作って OC(行)方向に分割する従来方式の方が速い
+	if nStrips < maxWorkers && ocPerGroup/4 > nStrips {
+		col := getFloat32Scratch(colSize * patchSize)
+		im2col(xf, col, n, g, C, H, W, icPerGroup,
+			KH, KW, OH, OW, strideH, strideW, padTop, padLeft, dilH, dilW, 0, OH)
+		nWorkers := min(maxWorkers, ocPerGroup/4)
+		chunk := ((ocPerGroup+nWorkers-1)/nWorkers + 3) &^ 3
+		var wg sync.WaitGroup
+		for w := 0; w < nWorkers; w++ {
+			ocStart := w * chunk
+			if ocStart >= ocPerGroup {
+				break
+			}
+			ocEnd := min(ocStart+chunk, ocPerGroup)
+			wg.Add(1)
+			go func(ocStart, ocEnd int) {
+				defer wg.Done()
+				if bias != nil {
+					gemmF32WithBias(wf[ocStart*colSize:], col, of[ocStart*patchSize:],
+						ocEnd-ocStart, patchSize, colSize, bias[ocStart:])
+				} else {
+					gemmF32(wf[ocStart*colSize:], col, of[ocStart*patchSize:],
+						ocEnd-ocStart, patchSize, colSize)
+				}
+			}(ocStart, ocEnd)
+		}
+		wg.Wait()
+		putFloat32Scratch(col)
+		return
+	}
+
 	// 単一ストリップなら中間バッファを介さず出力へ直接 GEMM(bias 融合)
-	if stripRows >= OH {
+	if nStrips <= 1 {
 		col := getFloat32Scratch(colSize * patchSize)
 		im2col(xf, col, n, g, C, H, W, icPerGroup,
 			KH, KW, OH, OW, strideH, strideW, padTop, padLeft, dilH, dilW, 0, OH)
@@ -504,8 +538,6 @@ func convIm2colGemmStripsF32(
 		putFloat32Scratch(col)
 		return
 	}
-
-	nStrips := (OH + stripRows - 1) / stripRows
 	runStrip := func(ohFrom, ohTo int) {
 		stripPatch := (ohTo - ohFrom) * OW
 		col := getFloat32Scratch(colSize * stripPatch)
