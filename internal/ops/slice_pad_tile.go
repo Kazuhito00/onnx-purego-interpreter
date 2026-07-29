@@ -148,20 +148,64 @@ func sliceDense[T tensor.Numeric](t *tensor.Dense[T], outShape tensor.Shape, par
 	ndim := srcShape.NDim()
 	size := outShape.Size()
 	out := make([]T, size)
-	srcStrides := tensor.Strides(srcShape)
-	outStrides := tensor.Strides(outShape)
-
-	for i := 0; i < size; i++ {
-		srcIdx := 0
-		rem := i
-		for d := 0; d < ndim; d++ {
-			coord := rem / outStrides[d]
-			rem %= outStrides[d]
-			srcCoord := params[d].start + coord*params[d].step
-			srcIdx += srcCoord * srcStrides[d]
-		}
-		out[i] = src[srcIdx]
+	if size == 0 || ndim == 0 {
+		return tensor.NewDense[T](outShape, out)
 	}
+	srcStrides := tensor.Strides(srcShape)
+
+	// 最内次元は src 上で等間隔(step==1 なら連続)なのでラン単位で書く。
+	// 外側座標はカウンタの差分更新で回し、毎要素の除算を排除する。
+	innerN := outShape[ndim-1]
+	innerStep := params[ndim-1].step * srcStrides[ndim-1]
+	outer := size / innerN
+	outerStrides := make([]int, ndim-1)
+	os := 1
+	for d := ndim - 2; d >= 0; d-- {
+		outerStrides[d] = os
+		os *= outShape[d]
+	}
+	base0 := 0
+	for d := 0; d < ndim; d++ {
+		base0 += params[d].start * srcStrides[d]
+	}
+
+	workers := 1
+	if size >= elementwiseParallelMin && outer > 1 {
+		workers = activeActConfig.ParallelOpsWorkers()
+	}
+	forEachRangeParallel(outer, workers, func(lo, hi int) {
+		coords := make([]int, ndim-1)
+		srcBase := base0
+		rem := lo
+		for d := 0; d < ndim-1; d++ {
+			c := rem / outerStrides[d]
+			rem %= outerStrides[d]
+			coords[d] = c
+			srcBase += c * params[d].step * srcStrides[d]
+		}
+		for o := lo; o < hi; o++ {
+			dstOff := o * innerN
+			if innerStep == 1 {
+				copy(out[dstOff:dstOff+innerN], src[srcBase:srcBase+innerN])
+			} else {
+				s := srcBase
+				row := out[dstOff : dstOff+innerN : dstOff+innerN]
+				for k := range row {
+					row[k] = src[s]
+					s += innerStep
+				}
+			}
+			for d := ndim - 2; d >= 0; d-- {
+				coords[d]++
+				srcBase += params[d].step * srcStrides[d]
+				if coords[d] < outShape[d] {
+					break
+				}
+				srcBase -= coords[d] * params[d].step * srcStrides[d]
+				coords[d] = 0
+			}
+		}
+	})
 	return tensor.NewDense[T](outShape, out)
 }
 

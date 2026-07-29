@@ -152,22 +152,72 @@ func transposeDense[T tensor.Numeric](t *tensor.Dense[T], perm []int64) (*tensor
 		newShape[i] = shape[int(p)]
 	}
 
-	srcStrides := tensor.Strides(shape)
-	dstStrides := tensor.Strides(newShape)
 	data := make([]T, t.Len())
 	src := t.Data()
-
-	for i := 0; i < t.Len(); i++ {
-		// Decompose dst flat index into dst coords
-		remaining := i
-		srcIdx := 0
-		for d := 0; d < ndim; d++ {
-			coord := remaining / dstStrides[d]
-			remaining %= dstStrides[d]
-			srcIdx += coord * srcStrides[int(perm[d])]
-		}
-		data[i] = src[srcIdx]
+	if t.Len() == 0 {
+		return tensor.NewDense[T](newShape, data), nil
 	}
+	if ndim <= 1 {
+		copy(data, src)
+		return tensor.NewDense[T](newShape, data), nil
+	}
+
+	srcStrides := tensor.Strides(shape)
+	// dst 次元 d に対応する src ストライド
+	sstr := make([]int, ndim)
+	for d := 0; d < ndim; d++ {
+		sstr[d] = srcStrides[int(perm[d])]
+	}
+	// 出力は最内次元の連続ラン単位で書く(perm が最終軸を保つ場合は copy)。
+	// 外側座標はカウンタの差分更新で回し、毎要素の除算を排除する。
+	innerN := newShape[ndim-1]
+	innerS := sstr[ndim-1]
+	outer := t.Len() / innerN
+	outerStrides := make([]int, ndim-1)
+	os := 1
+	for d := ndim - 2; d >= 0; d-- {
+		outerStrides[d] = os
+		os *= newShape[d]
+	}
+
+	workers := 1
+	if t.Len() >= elementwiseParallelMin && outer > 1 {
+		workers = activeActConfig.ParallelOpsWorkers()
+	}
+	forEachRangeParallel(outer, workers, func(lo, hi int) {
+		// 範囲先頭のみ除算で座標と srcBase を求め、以後は差分更新
+		coords := make([]int, ndim-1)
+		srcBase := 0
+		rem := lo
+		for d := 0; d < ndim-1; d++ {
+			c := rem / outerStrides[d]
+			rem %= outerStrides[d]
+			coords[d] = c
+			srcBase += c * sstr[d]
+		}
+		for o := lo; o < hi; o++ {
+			dstOff := o * innerN
+			if innerS == 1 {
+				copy(data[dstOff:dstOff+innerN], src[srcBase:srcBase+innerN])
+			} else {
+				s := srcBase
+				row := data[dstOff : dstOff+innerN : dstOff+innerN]
+				for k := range row {
+					row[k] = src[s]
+					s += innerS
+				}
+			}
+			for d := ndim - 2; d >= 0; d-- {
+				coords[d]++
+				srcBase += sstr[d]
+				if coords[d] < newShape[d] {
+					break
+				}
+				srcBase -= coords[d] * sstr[d]
+				coords[d] = 0
+			}
+		}
+	})
 
 	return tensor.NewDense[T](newShape, data), nil
 }

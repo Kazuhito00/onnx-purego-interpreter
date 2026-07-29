@@ -33,7 +33,7 @@ func RegisterAll(r *Registry, config ...*KernelConfig) {
 
 	// Shape ops
 	r.Register("Reshape", opReshape)
-	r.Register("Transpose", opTranspose)
+	r.Register("Transpose", makeActivation(opTranspose, kc))
 	r.Register("Squeeze", opSqueeze)
 	r.Register("Unsqueeze", opUnsqueeze)
 	r.Register("Flatten", opFlatten)
@@ -93,7 +93,7 @@ func RegisterAll(r *Registry, config ...*KernelConfig) {
 	r.Register("Range", opRange)
 
 	// Tensor manipulation ops
-	r.Register("Slice", opSlice)
+	r.Register("Slice", makeActivation(opSlice, kc))
 	r.Register("Pad", opPad)
 	r.Register("Tile", opTile)
 	r.Register("TopK", opTopK)
