@@ -328,7 +328,12 @@ func softmaxF32LastAxis(t *tensor.Dense[float32]) *tensor.Dense[float32] {
 	src := t.Data()
 	out := make([]float32, t.Len())
 
-	for o := 0; o < outerSize; o++ {
+	// 行ごとに独立なため、大きな入力では行単位で並列化する
+	workers := 1
+	if t.Len() >= elementwiseParallelMin && outerSize > 1 {
+		workers = activeActConfig.ParallelOpsWorkers()
+	}
+	forEachIndexParallel(outerSize, workers, func(o int) {
 		base := o * axisSize
 		row := src[base : base+axisSize]
 		oRow := out[base : base+axisSize]
@@ -352,7 +357,7 @@ func softmaxF32LastAxis(t *tensor.Dense[float32]) *tensor.Dense[float32] {
 		for i := 0; i < axisSize; i++ {
 			oRow[i] = float32(float64(oRow[i]) * invSum)
 		}
-	}
+	})
 
 	return tensor.NewDense[float32](shape.Clone(), out)
 }

@@ -707,35 +707,47 @@ func convTranspose2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T]
 			}
 
 			HW := H * W
+			// GEMM(列分割)と col2im(oc 分割)を並列化する
+			ctWorkers := 1
+			if colSize*HW*C > 500_000 && (activeConvConfig == nil || activeConvConfig.UseParallelConv) {
+				ctWorkers = activeConvConfig.Workers()
+			}
 			for n := 0; n < N; n++ {
 				// GEMM: WT[colSize, C] × X[C, H*W] → col[colSize, H*W]
 				xOff := n * C * HW
-				col := make([]float32, colSize*HW)
-				gemmF32(wt, xf[xOff:xOff+C*HW], col, colSize, HW, C)
+				col := getFloat32Scratch(colSize * HW)
+				clear(col)
+				gemmF32ParallelCols(wt, xf[xOff:xOff+C*HW], col, colSize, HW, C, ctWorkers)
 
 				// col2im: scatter col[OC*KH*KW, H*W] → output[OC, OH, OW]
+				// oc ごとに出力先が互いに素なため oc 単位で並列化できる
 				oOff := n * OC * OH * OW
-				for ih := 0; ih < H; ih++ {
-					for iw := 0; iw < W; iw++ {
-						colIdx := ih*W + iw
-						for oc := 0; oc < OC; oc++ {
-							for kh := 0; kh < KH; kh++ {
-								oh := ih*strideH - padTop + kh*dilH
+				forEachIndexParallel(OC, ctWorkers, func(oc int) {
+					for kh := 0; kh < KH; kh++ {
+						oh0 := -padTop + kh*dilH
+						for kw := 0; kw < KW; kw++ {
+							ci := (oc*KH+kh)*KW + kw
+							colRow := col[ci*HW : (ci+1)*HW]
+							ow0 := -padLeft + kw*dilW
+							for ih := 0; ih < H; ih++ {
+								oh := ih*strideH + oh0
 								if oh < 0 || oh >= OH {
 									continue
 								}
-								for kw := 0; kw < KW; kw++ {
-									ow := iw*strideW - padLeft + kw*dilW
+								outRow := oOff + (oc*OH+oh)*OW
+								base := ih * W
+								for iw := 0; iw < W; iw++ {
+									ow := iw*strideW + ow0
 									if ow < 0 || ow >= OW {
 										continue
 									}
-									ci := (oc*KH+kh)*KW + kw
-									of[oOff+(oc*OH+oh)*OW+ow] += col[ci*HW+colIdx]
+									of[outRow+ow] += colRow[base+iw]
 								}
 							}
 						}
 					}
-				}
+				})
+				putFloat32Scratch(col)
 			}
 			goto addBias
 		}

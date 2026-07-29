@@ -78,46 +78,71 @@ func gemmF32ParallelCols(A, B, C []float32, M, N, K, maxWorkers int) {
 
 // gemmF32TiledCols は C の列範囲 [jFrom, jTo) のみを計算する。
 // 互いに素な列範囲であれば複数 goroutine から同一 C へ並行に呼び出せる。
+//
+// B の行ストライド N がパネル幅 nc より大きい場合は、(k0, j0) パネルを
+// 連続バッファへパックしてから microkernel で読む(BLIS 流)。ストライド越しの
+// 読み込みを 1 回のコピーに置き換え、M/4 回のマイクロカーネル走査で償却する。
+// 累積順序は不変なので結果は非パック時とビット一致する。
 func gemmF32TiledCols(A, B, C []float32, M, N, K, jFrom, jTo int) {
+	usePack := N > nc && M >= 8
+	var panel []float32
+	if usePack {
+		panel = getFloat32Scratch(kc * nc)
+		defer putFloat32Scratch(panel)
+	}
 	for j0 := jFrom; j0 < jTo; j0 += nc {
 		jEnd := min(j0+nc, jTo)
 		for k0 := 0; k0 < K; k0 += kc {
 			kEnd := min(k0+kc, K)
 			kLen := kEnd - k0
+
+			// パック時は A/B/C をパネル座標系に読み替える
+			aM, bM, cM := A, B, C
+			jLo, jHi, kOff, ldb := j0, jEnd, k0, N
+			if usePack {
+				jLen := jEnd - j0
+				for k := 0; k < kLen; k++ {
+					src := (k0+k)*N + j0
+					copy(panel[k*jLen:(k+1)*jLen], B[src:src+jLen])
+				}
+				aM, bM, cM = A[k0:], panel, C[j0:]
+				jLo, jHi, kOff, ldb = 0, jLen, 0, jLen
+			}
+
 			for i0 := 0; i0 < M; i0 += mc {
 				iE := min(i0+mc, M)
 				i := i0
 				for ; i+3 < iE; i += 4 {
-					j := j0
-					for ; j+7 < jEnd; j += 8 {
-						microKernel4x8(A, B, C, i, j, k0, kLen, K, N)
+					j := jLo
+					for ; j+7 < jHi; j += 8 {
+						microKernel4x8(aM, bM, cM, i, j, kOff, kLen, K, ldb, N)
 					}
-					for ; j+3 < jEnd; j += 4 {
-						microKernel4x4(A, B, C, i, j, k0, kLen, K, N)
+					for ; j+3 < jHi; j += 4 {
+						microKernel4x4(aM, bM, cM, i, j, kOff, kLen, K, ldb, N)
 					}
-					if j < jEnd {
-						microKernelMxN(A, B, C, i, j, k0, kLen, K, N, 4, jEnd-j)
+					if j < jHi {
+						microKernelMxN(aM, bM, cM, i, j, kOff, kLen, K, ldb, N, 4, jHi-j)
 					}
 				}
 				rem := iE - i
 				if rem >= 2 {
-					j := j0
-					for ; j+7 < jEnd; j += 8 {
-						microKernel2x8(A, B, C, i, j, k0, kLen, K, N)
+					j := jLo
+					for ; j+7 < jHi; j += 8 {
+						microKernel2x8(aM, bM, cM, i, j, kOff, kLen, K, ldb, N)
 					}
-					if j < jEnd {
-						microKernelMxN(A, B, C, i, j, k0, kLen, K, N, 2, jEnd-j)
+					if j < jHi {
+						microKernelMxN(aM, bM, cM, i, j, kOff, kLen, K, ldb, N, 2, jHi-j)
 					}
 					i += 2
 					rem -= 2
 				}
 				if rem >= 1 {
-					j := j0
-					for ; j+7 < jEnd; j += 8 {
-						microKernel1x8(A, B, C, i, j, k0, kLen, K, N)
+					j := jLo
+					for ; j+7 < jHi; j += 8 {
+						microKernel1x8(aM, bM, cM, i, j, kOff, kLen, K, ldb, N)
 					}
-					if j < jEnd {
-						microKernelMxN(A, B, C, i, j, k0, kLen, K, N, 1, jEnd-j)
+					if j < jHi {
+						microKernelMxN(aM, bM, cM, i, j, kOff, kLen, K, ldb, N, 1, jHi-j)
 					}
 				}
 			}
@@ -126,7 +151,7 @@ func gemmF32TiledCols(A, B, C []float32, M, N, K, jFrom, jTo int) {
 }
 
 // microKernel4x8: 32 accumulators, k-unrolled by 4
-func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
+func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb, ldc int) {
 	var c00, c01, c02, c03, c04, c05, c06, c07 float32
 	var c10, c11, c12, c13, c14, c15, c16, c17 float32
 	var c20, c21, c22, c23, c24, c25, c26, c27 float32
@@ -381,7 +406,7 @@ func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 	}
 
 	// Store results - use exact-length slices for BCE
-	o0 := i*ldb + j
+	o0 := i*ldc + j
 	cr0 := C[o0 : o0+8 : o0+8]
 	cr0[0] += c00
 	cr0[1] += c01
@@ -391,7 +416,7 @@ func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 	cr0[5] += c05
 	cr0[6] += c06
 	cr0[7] += c07
-	o1 := o0 + ldb
+	o1 := o0 + ldc
 	cr1 := C[o1 : o1+8 : o1+8]
 	cr1[0] += c10
 	cr1[1] += c11
@@ -401,7 +426,7 @@ func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 	cr1[5] += c15
 	cr1[6] += c16
 	cr1[7] += c17
-	o2 := o1 + ldb
+	o2 := o1 + ldc
 	cr2 := C[o2 : o2+8 : o2+8]
 	cr2[0] += c20
 	cr2[1] += c21
@@ -411,7 +436,7 @@ func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 	cr2[5] += c25
 	cr2[6] += c26
 	cr2[7] += c27
-	o3 := o2 + ldb
+	o3 := o2 + ldc
 	cr3 := C[o3 : o3+8 : o3+8]
 	cr3[0] += c30
 	cr3[1] += c31
@@ -424,7 +449,7 @@ func microKernel4x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 }
 
 // microKernel4x4: 16 accumulators for column remainder
-func microKernel4x4(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
+func microKernel4x4(A, B, C []float32, i, j, k0, kLen, lda, ldb, ldc int) {
 	var c00, c01, c02, c03 float32
 	var c10, c11, c12, c13 float32
 	var c20, c21, c22, c23 float32
@@ -462,25 +487,25 @@ func microKernel4x4(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 		c33 += a3k * b3
 		bIdx += ldb
 	}
-	o0 := i*ldb + j
+	o0 := i*ldc + j
 	cr0 := C[o0 : o0+4 : o0+4] // BCE
 	cr0[0] += c00
 	cr0[1] += c01
 	cr0[2] += c02
 	cr0[3] += c03
-	o1 := o0 + ldb
+	o1 := o0 + ldc
 	cr1 := C[o1 : o1+4 : o1+4] // BCE
 	cr1[0] += c10
 	cr1[1] += c11
 	cr1[2] += c12
 	cr1[3] += c13
-	o2 := o1 + ldb
+	o2 := o1 + ldc
 	cr2 := C[o2 : o2+4 : o2+4] // BCE
 	cr2[0] += c20
 	cr2[1] += c21
 	cr2[2] += c22
 	cr2[3] += c23
-	o3 := o2 + ldb
+	o3 := o2 + ldc
 	cr3 := C[o3 : o3+4 : o3+4] // BCE
 	cr3[0] += c30
 	cr3[1] += c31
@@ -489,7 +514,7 @@ func microKernel4x4(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 }
 
 // microKernel2x8: 16 accumulators for row remainder
-func microKernel2x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
+func microKernel2x8(A, B, C []float32, i, j, k0, kLen, lda, ldb, ldc int) {
 	var c00, c01, c02, c03, c04, c05, c06, c07 float32
 	var c10, c11, c12, c13, c14, c15, c16, c17 float32
 	a0 := A[i*lda+k0 : i*lda+k0+kLen : i*lda+k0+kLen]             // BCE
@@ -525,7 +550,7 @@ func microKernel2x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 		c17 += a1k * b7
 		bIdx += ldb
 	}
-	o0 := i*ldb + j
+	o0 := i*ldc + j
 	cr0 := C[o0 : o0+8 : o0+8] // BCE
 	cr0[0] += c00
 	cr0[1] += c01
@@ -535,7 +560,7 @@ func microKernel2x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 	cr0[5] += c05
 	cr0[6] += c06
 	cr0[7] += c07
-	o1 := o0 + ldb
+	o1 := o0 + ldc
 	cr1 := C[o1 : o1+8 : o1+8] // BCE
 	cr1[0] += c10
 	cr1[1] += c11
@@ -548,7 +573,7 @@ func microKernel2x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 }
 
 // microKernel1x8: 8 accumulators for single row remainder
-func microKernel1x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
+func microKernel1x8(A, B, C []float32, i, j, k0, kLen, lda, ldb, ldc int) {
 	var c0, c1, c2, c3, c4, c5, c6, c7 float32
 	aRow := A[i*lda+k0 : i*lda+k0+kLen : i*lda+k0+kLen] // BCE
 	bIdx := k0*ldb + j
@@ -565,7 +590,7 @@ func microKernel1x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 		c7 += aik * bSlice[7]
 		bIdx += ldb
 	}
-	o := i*ldb + j
+	o := i*ldc + j
 	cr := C[o : o+8 : o+8] // BCE
 	cr[0] += c0
 	cr[1] += c1
@@ -578,10 +603,10 @@ func microKernel1x8(A, B, C []float32, i, j, k0, kLen, lda, ldb int) {
 }
 
 // microKernelMxN: generic small M x N remainder kernel
-func microKernelMxN(A, B, C []float32, i, j, k0, kLen, lda, ldb, mR, nR int) {
+func microKernelMxN(A, B, C []float32, i, j, k0, kLen, lda, ldb, ldc, mR, nR int) {
 	for ii := 0; ii < mR; ii++ {
 		aRow := A[(i+ii)*lda+k0 : (i+ii)*lda+k0+kLen : (i+ii)*lda+k0+kLen] // BCE
-		cSlice := C[(i+ii)*ldb+j : (i+ii)*ldb+j+nR : (i+ii)*ldb+j+nR]      // BCE
+		cSlice := C[(i+ii)*ldc+j : (i+ii)*ldc+j+nR : (i+ii)*ldc+j+nR]      // BCE
 		bIdx := k0*ldb + j
 		for k := 0; k < kLen; k++ {
 			aik := aRow[k]

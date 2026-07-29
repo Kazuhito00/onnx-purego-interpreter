@@ -29,7 +29,7 @@ func RegisterAll(r *Registry, config ...*KernelConfig) {
 	r.Register("HardSigmoid", makeActivation(opHardSigmoid, kc))
 	r.Register("HardSwish", makeActivation(opHardSwish, kc))
 	r.Register("Tanh", opTanh)
-	r.Register("Softmax", opSoftmax)
+	r.Register("Softmax", makeActivation(opSoftmax, kc))
 
 	// Shape ops
 	r.Register("Reshape", opReshape)

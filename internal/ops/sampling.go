@@ -142,6 +142,9 @@ func resizeDense[T tensor.Numeric](t *tensor.Dense[T], scales []float32, sizes [
 	if mode == "cubic" && ndim == 4 {
 		return resizeCubicNCHW(t, outShape, coordMode, cubicCoeffA)
 	}
+	if mode == "nearest" && ndim == 4 && outShape[0] == shape[0] && outShape[1] == shape[1] {
+		return resizeNearestNCHW(t, outShape, coordMode, nearestMode)
+	}
 
 	src := t.Data()
 	out := make([]T, outShape.Size())
@@ -162,6 +165,43 @@ func resizeDense[T tensor.Numeric](t *tensor.Dense[T], scales []float32, sizes [
 		}
 		out[i] = src[srcIdx]
 	}
+	return tensor.NewDense[T](outShape, out)
+}
+
+// resizeNearestNCHW は空間次元のみの nearest resize を
+// 行・列インデックステーブルの事前計算+チャネル並列で処理する
+// (汎用パスの毎要素座標分解を回避。写像は resizeNearestIndex と同一)。
+func resizeNearestNCHW[T tensor.Numeric](t *tensor.Dense[T], outShape tensor.Shape, coordMode, nearestMode string) *tensor.Dense[T] {
+	inShape := t.Shape()
+	N, C, inH, inW := inShape[0], inShape[1], inShape[2], inShape[3]
+	outH, outW := outShape[2], outShape[3]
+	src := t.Data()
+	out := make([]T, outShape.Size())
+
+	rowIdx := make([]int, outH)
+	for oh := range rowIdx {
+		rowIdx[oh] = clampIndex(resizeNearestIndex(oh, inH, outH, coordMode, nearestMode), inH)
+	}
+	colIdx := make([]int, outW)
+	for ow := range colIdx {
+		colIdx[ow] = clampIndex(resizeNearestIndex(ow, inW, outW, coordMode, nearestMode), inW)
+	}
+
+	workers := 1
+	if N*C*outH*outW >= elementwiseParallelMin {
+		workers = activeActConfig.ParallelOpsWorkers()
+	}
+	forEachIndexParallel(N*C, workers, func(nc int) {
+		baseIn := nc * inH * inW
+		baseOut := nc * outH * outW
+		for oh := 0; oh < outH; oh++ {
+			srcRow := src[baseIn+rowIdx[oh]*inW : baseIn+rowIdx[oh]*inW+inW]
+			outRow := out[baseOut+oh*outW : baseOut+oh*outW+outW]
+			for ow, ci := range colIdx {
+				outRow[ow] = srcRow[ci]
+			}
+		}
+	})
 	return tensor.NewDense[T](outShape, out)
 }
 
