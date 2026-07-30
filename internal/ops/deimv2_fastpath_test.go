@@ -87,6 +87,10 @@ func TestConvStripsMatchGenericPath(t *testing.T) {
 		{"dw5x5p2", 1, 6, 20, 18, 6, 5, 5, 1, 2, 1, 6, true},
 		{"dw7x7p3", 1, 4, 16, 15, 4, 7, 7, 1, 3, 1, 4, false},
 		{"dw5x5big", 1, 8, 64, 64, 8, 5, 5, 1, 2, 1, 8, true}, // 並列 path を通るサイズ
+		// Winograd F(2x2,3x3) 適用条件(3x3 s1 d1 g1, C/OC>=64, タイル数>=900)を
+		// 満たすケース。小さな整数値なら変換(係数 0.5)も 2 進で正確なため厳密一致する
+		{"wino3x3even", 1, 64, 64, 64, 64, 3, 3, 1, 1, 1, 1, true},
+		{"wino3x3odd", 1, 64, 63, 61, 64, 3, 3, 1, 1, 1, 1, true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

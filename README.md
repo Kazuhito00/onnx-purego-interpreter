@@ -212,6 +212,7 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | `UseParallelConv` | true | 大きな Conv の goroutine 並列化（ストリップ単位の動的分配） |
 | `UseParallelOps` | true | Conv 以外（MaxPool / MatMul / 活性化 / Resize / ReduceMean）の goroutine 並列化 |
 | `UseReduceFastPath` | true | ReduceMean の末尾連続軸 fast path（GAP / LayerNorm 形状） |
+| `UseWinograd` | true | 3×3 stride1 dense conv の Winograd F(2×2,3×3)（FLOP 1/2.25。丸めが直接法と異なる） |
 | `MaxThreads` | 0 | 最大 goroutine 並列数 (0 = `runtime.GOMAXPROCS`) |
 
 大きな MaxPool / MatMul / 活性化などの並列化は `UseParallelOps`、並列度は `MaxThreads` で制御できます。

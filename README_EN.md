@@ -212,6 +212,7 @@ sess, _ := onnx.NewSessionWithOptions(modelBytes,
 | `UseParallelConv` | true | Goroutine parallelism for large Conv (dynamically scheduled strips) |
 | `UseParallelOps` | true | Goroutine parallelism for non-Conv ops (MaxPool / MatMul / activations / Resize / ReduceMean) |
 | `UseReduceFastPath` | true | ReduceMean trailing-axes fast path (GAP / LayerNorm shapes) |
+| `UseWinograd` | true | Winograd F(2×2,3×3) for 3×3 stride-1 dense conv (1/2.25 FLOPs; rounding differs from direct conv) |
 | `MaxThreads` | 0 | Max goroutine count (0 = `runtime.GOMAXPROCS`) |
 
 Parallelism for large MaxPool / MatMul / activation ops is controlled by `UseParallelOps`, and the degree of parallelism by `MaxThreads`.

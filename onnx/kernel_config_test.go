@@ -114,6 +114,7 @@ func TestKernelConfigIndividual(t *testing.T) {
 		{"UseParallelConv=false", func(kc *KernelConfig) { kc.UseParallelConv = false }},
 		{"UseParallelOps=false", func(kc *KernelConfig) { kc.UseParallelOps = false }},
 		{"UseReduceFastPath=false", func(kc *KernelConfig) { kc.UseReduceFastPath = false }},
+		{"UseWinograd=false", func(kc *KernelConfig) { kc.UseWinograd = false }},
 	}
 
 	for _, f := range flags {

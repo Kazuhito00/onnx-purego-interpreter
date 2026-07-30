@@ -490,6 +490,29 @@ func conv2d[T tensor.Numeric](x, w *tensor.Dense[T], b *tensor.Dense[T], node *i
 		}
 	}
 
+	// Fast path: Winograd F(2x2,3x3) — 3x3 s1 の dense conv を FLOP 1/2.25 で計算
+	if winogradApplicable(kc, group, KH, KW, strideH, strideW, dilH, dilW, C, OC, OH, OW) {
+		if xf, ok := any(x.Data()).([]float32); ok {
+			wf := any(w.Data()).([]float32)
+			var bf []float32
+			if b != nil {
+				bf = any(b.Data()).([]float32)
+			}
+			outShape := tensor.Shape{N, OC, OH, OW}
+			out := make([]float32, outShape.Size())
+			wgWorkers := 1
+			if OC*OH*OW*C > 500_000 && (kc == nil || kc.UseParallelConv) {
+				cfg := kc
+				if cfg == nil {
+					cfg = DefaultKernelConfig()
+				}
+				wgWorkers = cfg.Workers()
+			}
+			convWinogradF32(xf, wf, bf, out, N, C, H, W, OC, OH, OW, padTop, padLeft, wgWorkers)
+			return any(tensor.NewDense[float32](outShape, out)).(*tensor.Dense[T]), nil
+		}
+	}
+
 	outShape := tensor.Shape{N, OC, OH, OW}
 	outData := make([]T, outShape.Size())
 	xData := x.Data()

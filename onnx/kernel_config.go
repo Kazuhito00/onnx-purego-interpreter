@@ -16,6 +16,7 @@ type KernelConfig struct {
 	UseParallelConv      bool // goroutine parallelism for large Conv
 	UseParallelOps       bool // goroutine parallelism for non-Conv ops (pool/matmul/activation/resize/reduce)
 	UseReduceFastPath    bool // ReduceMean trailing-axes fast path (GAP/LN shapes)
+	UseWinograd          bool // Winograd F(2x2,3x3) for 3x3 stride-1 dense conv
 	MaxThreads           int  // max goroutines for parallel ops (0 = runtime.GOMAXPROCS)
 }
 
@@ -32,6 +33,7 @@ func DefaultKernelConfig() *KernelConfig {
 		UseParallelConv:      true,
 		UseParallelOps:       true,
 		UseReduceFastPath:    true,
+		UseWinograd:          true,
 		MaxThreads:           0,
 	}
 }
@@ -51,6 +53,7 @@ func (kc *KernelConfig) toInternal() *ops.KernelConfig {
 		UseParallelConv:      kc.UseParallelConv,
 		UseParallelOps:       kc.UseParallelOps,
 		UseReduceFastPath:    kc.UseReduceFastPath,
+		UseWinograd:          kc.UseWinograd,
 		MaxThreads:           kc.MaxThreads,
 	}
 }
