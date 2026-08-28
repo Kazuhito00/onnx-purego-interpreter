@@ -364,6 +364,67 @@ func opGridSample(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error
 	}
 }
 
+// gridSamplePad applies the padding_mode coordinate transform (border clamp /
+// reflection) to a denormalized coordinate. "zeros" is left untouched here —
+// it is instead handled by bounds-checking at sample time so out-of-range
+// reads become 0.
+func gridSamplePad(v float64, size int, paddingMode string, alignCorners bool) float64 {
+	switch paddingMode {
+	case "border":
+		return clampFloat64(v, 0, float64(size-1))
+	case "reflection":
+		return clampFloat64(gridSampleReflect(v, size, alignCorners), 0, float64(size-1))
+	default: // "zeros"
+		return v
+	}
+}
+
+func clampFloat64(v, lo, hi float64) float64 {
+	if hi < lo {
+		return lo
+	}
+	if v < lo {
+		return lo
+	}
+	if v > hi {
+		return hi
+	}
+	return v
+}
+
+func clampInt(v, size int) int {
+	if v < 0 {
+		return 0
+	}
+	if v > size-1 {
+		return size - 1
+	}
+	return v
+}
+
+// gridSampleReflect mirrors PyTorch/ONNX GridSample's reflection padding:
+// reflects v back and forth over [twiceLow/2, twiceHigh/2] until it lands in range.
+func gridSampleReflect(v float64, size int, alignCorners bool) float64 {
+	if size == 1 {
+		return 0
+	}
+	var twiceLow, twiceHigh float64
+	if alignCorners {
+		twiceLow, twiceHigh = 0, float64(2*(size-1))
+	} else {
+		twiceLow, twiceHigh = -1, float64(2*size-1)
+	}
+	lo := twiceLow / 2
+	span := (twiceHigh - twiceLow) / 2
+	v = math.Abs(v - lo)
+	extra := math.Mod(v, span)
+	flips := int(math.Floor(v / span))
+	if flips%2 == 0 {
+		return extra + lo
+	}
+	return span - extra + lo
+}
+
 func gridSampleF32(x, grid *tensor.Dense[float32], mode, paddingMode string, alignCorners bool) *tensor.Dense[float32] {
 	xs := x.Shape()    // [N, C, Hin, Win]
 	gs := grid.Shape() // [N, Hout, Wout, 2]
@@ -390,6 +451,8 @@ func gridSampleF32(x, grid *tensor.Dense[float32], mode, paddingMode string, ali
 					ix = ((gx+1)*float64(Win) - 1) / 2
 					iy = ((gy+1)*float64(Hin) - 1) / 2
 				}
+				ix = gridSamplePad(ix, Win, paddingMode, alignCorners)
+				iy = gridSamplePad(iy, Hin, paddingMode, alignCorners)
 
 				for c := 0; c < C; c++ {
 					var val float32
@@ -410,6 +473,11 @@ func gridSampleF32(x, grid *tensor.Dense[float32], mode, paddingMode string, ali
 						wd := float32((ix - float64(x0)) * (iy - float64(y0)))
 						base := n*C*Hin*Win + c*Hin*Win
 						getSafe := func(y, x int) float32 {
+							if paddingMode != "zeros" {
+								// Coordinates were already clamped/reflected into range above;
+								// the floor+1 corner can still step one pixel past the border.
+								return xData[base+clampInt(y, Hin)*Win+clampInt(x, Win)]
+							}
 							if y >= 0 && y < Hin && x >= 0 && x < Win {
 								return xData[base+y*Win+x]
 							}

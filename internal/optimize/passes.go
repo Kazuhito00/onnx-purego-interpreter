@@ -291,6 +291,48 @@ func fuseConvBatchNorm(g *ir.Graph) {
 	removeNodes(g, toRemove)
 }
 
+// convOutChannels returns a Conv/FusedConv node's output channel count from
+// its weight initializer's shape ([out_channels, in_channels/group, kH, kW]),
+// or -1 if unavailable.
+func convOutChannels(g *ir.Graph, conv *ir.Node) int64 {
+	if len(conv.Inputs) < 2 {
+		return -1
+	}
+	w := g.Initializers[conv.Inputs[1]]
+	if w == nil || len(w.Shape) == 0 {
+		return -1
+	}
+	return w.Shape[0]
+}
+
+// isPerChannelBiasShape reports whether shape is a valid ONNX Conv bias shape
+// for outChannels output channels: either 1-D [C], or an N-D shape that is 1
+// everywhere except axis 1 (e.g. [1,C,1,1]). Add(Conv, const) may only be
+// folded into the Conv's bias input when the added constant is provably a
+// per-channel broadcast — otherwise (e.g. a full spatial [1,C,H,W] constant)
+// folding it into the 1-D bias slot silently reinterprets unrelated spatial
+// values as per-channel biases and corrupts the result.
+func isPerChannelBiasShape(shape ir.Shape, outChannels int64) bool {
+	if outChannels <= 0 {
+		return false
+	}
+	if len(shape) == 1 {
+		return shape[0] == outChannels
+	}
+	if len(shape) >= 2 {
+		if shape[1] != outChannels {
+			return false
+		}
+		for i, d := range shape {
+			if i != 1 && d != 1 {
+				return false
+			}
+		}
+		return true
+	}
+	return false
+}
+
 // fuseConvAddBias folds Conv ↁEAdd(constant per-channel) into Conv bias.
 func fuseConvAddBias(g *ir.Graph) {
 	producer := make(map[string]*ir.Node)
@@ -323,7 +365,7 @@ func fuseConvAddBias(g *ir.Graph) {
 			otherName := add.Inputs[1-idx]
 			if p, ok := producer[name]; ok && (p.OpType == "Conv" || p.OpType == "FusedConv") {
 				if useCount[name] == 1 {
-					if init, ok := g.Initializers[otherName]; ok && init.DType == ir.DataTypeFloat {
+					if init, ok := g.Initializers[otherName]; ok && init.DType == ir.DataTypeFloat && isPerChannelBiasShape(init.Shape, convOutChannels(g, p)) {
 						conv = p
 						convOut = name
 						biasInit = init

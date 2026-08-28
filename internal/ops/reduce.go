@@ -327,12 +327,9 @@ func reduceMaxDense[T tensor.Numeric](x *tensor.Dense[T], axes []int, keepDims b
 
 	xData := x.Data()
 	outData := make([]T, outShape.Size())
-	// Init with first element value (safe for all numeric types)
-	if x.Len() > 0 {
-		for i := range outData {
-			outData[i] = xData[0]
-		}
-	}
+	// 各出力バケットは自分のグループの最初の要素で初期化する必要がある
+	// (xData[0] で一括初期化すると、他グループの値が紛れ込んで誤った最大値になる)。
+	first := make([]bool, outShape.Size())
 	strides := tensor.Strides(shape)
 	outStrides := tensor.Strides(outShape)
 
@@ -352,7 +349,10 @@ func reduceMaxDense[T tensor.Numeric](x *tensor.Dense[T], axes []int, keepDims b
 				outDim++
 			}
 		}
-		if xData[i] > outData[outIdx] {
+		if !first[outIdx] {
+			outData[outIdx] = xData[i]
+			first[outIdx] = true
+		} else if xData[i] > outData[outIdx] {
 			outData[outIdx] = xData[i]
 		}
 	}
@@ -503,6 +503,51 @@ func reduceMeanDenseFloat32(x *tensor.Dense[float32], axes []int, keepDims bool)
 				data[o] = float32(sum * scale)
 			})
 			return tensor.NewDense[float32](outShape, data), nil
+		}
+
+		// Fast path: 縮約軸がちょうど1軸で、末尾でない場合(NCHW の axis=1 チャンネル縮約など。
+		// ConvNeXt 系 channels-first LayerNorm の mean/var 計算で頻出)。
+		// outer(軸より前) × axis × inner(軸より後) の3重ループに分解し、
+		// 出力位置ごとの加算順序(axis 昇順)は汎用パスと同一なのでビット一致する。
+		if len(axesSet) == 1 {
+			axis := -1
+			for a := range axesSet {
+				axis = a
+			}
+			outer := 1
+			for d := 0; d < axis; d++ {
+				outer *= shape[d]
+			}
+			axisSize := shape[axis]
+			inner := 1
+			for d := axis + 1; d < ndim; d++ {
+				inner *= shape[d]
+			}
+			if axisSize > 1 && inner > 0 && outer > 0 {
+				src := x.Data()
+				scale := 1.0 / float64(axisSize)
+				total := outer * inner
+				data := make([]float32, total)
+				workers := 1
+				if x.Len() >= elementwiseParallelMin && total > 1 {
+					workers = activeActConfig.ParallelOpsWorkers()
+				}
+				blockSize := axisSize * inner
+				// outer×inner を1次元の独立な出力位置集合として並列化する
+				// (outer だけを並列単位にすると N=1 のような一般的なケースで並列化されない)。
+				forEachIndexParallel(total, workers, func(flat int) {
+					o := flat / inner
+					i := flat % inner
+					sum := 0.0
+					idx := o*blockSize + i
+					for c := 0; c < axisSize; c++ {
+						sum += float64(src[idx])
+						idx += inner
+					}
+					data[flat] = float32(sum * scale)
+				})
+				return tensor.NewDense[float32](outShape, data), nil
+			}
 		}
 	}
 

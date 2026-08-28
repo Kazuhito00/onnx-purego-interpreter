@@ -768,11 +768,16 @@ func hasDynamicDim(s ir.Shape) bool {
 }
 
 func broadcastShapes(a, b ir.Shape) (ir.Shape, bool) {
-	if len(a) == 0 {
-		return cloneShape(b), true
-	}
-	if len(b) == 0 {
-		return cloneShape(a), true
+	if len(a) == 0 || len(b) == 0 {
+		// A truly unknown shape (unresolved dynamic value, e.g. a Slice with
+		// non-constant-foldable starts/ends) and a genuine rank-0 scalar both
+		// collapse to a nil ir.Shape here, so they can't be told apart. Guessing
+		// that the unknown side equals the other operand's shape previously
+		// caused false "graph output shape mismatch" errors on models whose
+		// broadcast operands aren't resolvable until after constant folding
+		// (e.g. channel-splitting Slice bounds computed via Shape/Gather/Div).
+		// Propagate "unknown" instead of asserting a possibly-wrong shape.
+		return nil, true
 	}
 	// If either shape contains dynamic dims, skip strict broadcast check
 	if hasDynamicDim(a) || hasDynamicDim(b) {

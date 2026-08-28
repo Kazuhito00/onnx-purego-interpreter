@@ -11,6 +11,14 @@ import (
 
 var activePoolConfig *KernelConfig
 
+// ceilDiv は a/b の切り上げ除算(a,b は非負を想定)。
+func ceilDiv(a, b int) int {
+	if a <= 0 {
+		return 0
+	}
+	return (a + b - 1) / b
+}
+
 func makeMaxPool(kc *KernelConfig) OpFunc {
 	return func(node *ir.Node, inputs []tensor.Tensor) ([]tensor.Tensor, error) {
 		activePoolConfig = kc
@@ -56,8 +64,16 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 
 	padTop, padLeft, padBottom, padRight := computePads(node, H, W, KH, KW, strideH, strideW)
 
-	OH := (H+padTop+padBottom-KH)/strideH + 1
-	OW := (W+padLeft+padRight-KW)/strideW + 1
+	floorOH := (H+padTop+padBottom-KH)/strideH + 1
+	floorOW := (W+padLeft+padRight-KW)/strideW + 1
+	OH, OW := floorOH, floorOW
+	if node.GetAttrInt("ceil_mode", 0) != 0 {
+		// ceil_mode=1: 最後のウィンドウが入力+pad領域の外へはみ出しても、開始位置さえ
+		// 範囲内なら出力に含める(ONNX Pool の ceil_mode 仕様)。はみ出した分は境界外
+		// アクセスとして下の各ループの範囲チェックにより自然に除外/pad 扱いされる。
+		OH = ceilDiv(H+padTop+padBottom-KH, strideH) + 1
+		OW = ceilDiv(W+padLeft+padRight-KW, strideW) + 1
+	}
 
 	outShape := tensor.Shape{N, C, OH, OW}
 	outData := make([]T, outShape.Size())
@@ -69,8 +85,12 @@ func maxPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 		poolWorkers = activePoolConfig.ParallelOpsWorkers()
 	}
 
+	// ceil_mode によって最終行/列が入力範囲外へはみ出す場合、境界チェックなしの
+	// 高速パスは範囲外読み出しを起こすため使わない(汎用パスへフォールバック)。
+	noOverhang := OH == floorOH && OW == floorOW
+
 	// Fast path: 2x2 stride 2, no padding
-	usePoolFP := activePoolConfig == nil || activePoolConfig.UsePoolFastPath
+	usePoolFP := noOverhang && (activePoolConfig == nil || activePoolConfig.UsePoolFastPath)
 	if usePoolFP && KH == 2 && KW == 2 && strideH == 2 && strideW == 2 && padTop == 0 && padLeft == 0 {
 		forEachIndexParallel(N*C, poolWorkers, func(nc int) {
 			xBase := nc * H * W
@@ -298,6 +318,10 @@ func avgPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 
 	OH := (H+padTop+padBottom-KH)/strideH + 1
 	OW := (W+padLeft+padRight-KW)/strideW + 1
+	if node.GetAttrInt("ceil_mode", 0) != 0 {
+		OH = ceilDiv(H+padTop+padBottom-KH, strideH) + 1
+		OW = ceilDiv(W+padLeft+padRight-KW, strideW) + 1
+	}
 
 	outShape := tensor.Shape{N, C, OH, OW}
 	outData := make([]T, outShape.Size())
@@ -318,7 +342,11 @@ func avgPool2d[T tensor.Numeric](x *tensor.Dense[T], node *ir.Node) (*tensor.Den
 							if ih >= 0 && ih < H && iw >= 0 && iw < W {
 								sum += float64(xData[xBase+ih*W+iw])
 								count++
-							} else if countIncludePad {
+							} else if countIncludePad && ih >= -padTop && ih < H+padBottom && iw >= -padLeft && iw < W+padRight {
+								// 明示的な pad 領域内のみカウント対象。ceil_mode によって
+								// 入力+宣言済み pad の外側へはみ出した分は
+								// count_include_pad の値に関わらず常に除外する
+								// (PyTorch/ONNX Runtime の ceil_mode 実装と同じ挙動)。
 								count++
 							}
 						}

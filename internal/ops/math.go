@@ -17,29 +17,52 @@ func binaryOp[T tensor.Numeric](a, b *tensor.Dense[T], fn func(T, T) T) (*tensor
 
 	// Fast path: same shape
 	if a.Shape().Equal(b.Shape()) {
-		data := make([]T, a.Len())
+		n := a.Len()
+		data := make([]T, n)
 		ad, bd := a.Data(), b.Data()
-		for i := range data {
-			data[i] = fn(ad[i], bd[i])
+		workers := 1
+		if n >= elementwiseParallelMin {
+			workers = activeActConfig.ParallelOpsWorkers()
 		}
+		forEachRangeParallel(n, workers, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				data[i] = fn(ad[i], bd[i])
+			}
+		})
 		return tensor.NewDense[T](outShape, data), nil
 	}
 
 	// Fast path: one operand is scalar (0-D or single element)
 	if b.Len() == 1 {
 		bv := b.Data()[0]
-		data := make([]T, a.Len())
-		for i, v := range a.Data() {
-			data[i] = fn(v, bv)
+		n := a.Len()
+		data := make([]T, n)
+		ad := a.Data()
+		workers := 1
+		if n >= elementwiseParallelMin {
+			workers = activeActConfig.ParallelOpsWorkers()
 		}
+		forEachRangeParallel(n, workers, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				data[i] = fn(ad[i], bv)
+			}
+		})
 		return tensor.NewDense[T](outShape, data), nil
 	}
 	if a.Len() == 1 {
 		av := a.Data()[0]
-		data := make([]T, b.Len())
-		for i, v := range b.Data() {
-			data[i] = fn(av, v)
+		n := b.Len()
+		data := make([]T, n)
+		bd := b.Data()
+		workers := 1
+		if n >= elementwiseParallelMin {
+			workers = activeActConfig.ParallelOpsWorkers()
 		}
+		forEachRangeParallel(n, workers, func(lo, hi int) {
+			for i := lo; i < hi; i++ {
+				data[i] = fn(av, bd[i])
+			}
+		})
 		return tensor.NewDense[T](outShape, data), nil
 	}
 
@@ -178,19 +201,20 @@ func binaryOp[T tensor.Numeric](a, b *tensor.Dense[T], fn func(T, T) T) (*tensor
 		}
 		innerN := outShape[ndim-1]
 		outerN := size / innerN
-		coords := make([]int, ndim)
-		for outer := 0; outer < outerN; outer++ {
-			// Decode outer index into coords[0..ndim-2]
+		workers := 1
+		if size >= elementwiseParallelMin && outerN > 1 {
+			workers = activeActConfig.ParallelOpsWorkers()
+		}
+		forEachIndexParallel(outerN, workers, func(outer int) {
+			// Decode outer index into per-dim coords and accumulate base offsets directly
+			// (avoids a shared coords buffer, which would race across goroutines).
 			rem := outer
-			for d := ndim - 2; d >= 0; d-- {
-				coords[d] = rem % outShape[d]
-				rem /= outShape[d]
-			}
-			// Compute base offsets for A and B
 			aBase, bBase := 0, 0
-			for d := 0; d < ndim-1; d++ {
-				aBase += coords[d] * aBS[d]
-				bBase += coords[d] * bBS[d]
+			for d := ndim - 2; d >= 0; d-- {
+				coord := rem % outShape[d]
+				rem /= outShape[d]
+				aBase += coord * aBS[d]
+				bBase += coord * bBS[d]
 			}
 			oBase := outer * innerN
 			aInner, bInner := aBS[ndim-1], bBS[ndim-1]
@@ -218,7 +242,7 @@ func binaryOp[T tensor.Numeric](a, b *tensor.Dense[T], fn func(T, T) T) (*tensor
 					data[oBase+j] = v
 				}
 			}
-		}
+		})
 		return tensor.NewDense[T](outShape, data), nil
 	}
 
